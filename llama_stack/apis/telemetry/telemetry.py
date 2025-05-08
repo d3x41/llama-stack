@@ -7,18 +7,14 @@
 from datetime import datetime
 from enum import Enum
 from typing import (
+    Annotated,
     Any,
-    Dict,
-    List,
     Literal,
-    Optional,
     Protocol,
-    Union,
     runtime_checkable,
 )
 
 from pydantic import BaseModel, Field
-from typing_extensions import Annotated
 
 from llama_stack.models.llama.datatypes import Primitive
 from llama_stack.schema_utils import json_schema_type, register_schema, webmethod
@@ -37,11 +33,11 @@ class SpanStatus(Enum):
 class Span(BaseModel):
     span_id: str
     trace_id: str
-    parent_span_id: Optional[str] = None
+    parent_span_id: str | None = None
     name: str
     start_time: datetime
-    end_time: Optional[datetime] = None
-    attributes: Optional[Dict[str, Any]] = Field(default_factory=dict)
+    end_time: datetime | None = None
+    attributes: dict[str, Any] | None = Field(default_factory=lambda: {})
 
     def set_attribute(self, key: str, value: Any):
         if self.attributes is None:
@@ -54,7 +50,7 @@ class Trace(BaseModel):
     trace_id: str
     root_span_id: str
     start_time: datetime
-    end_time: Optional[datetime] = None
+    end_time: datetime | None = None
 
 
 @json_schema_type
@@ -78,29 +74,29 @@ class EventCommon(BaseModel):
     trace_id: str
     span_id: str
     timestamp: datetime
-    attributes: Optional[Dict[str, Primitive]] = Field(default_factory=dict)
+    attributes: dict[str, Primitive] | None = Field(default_factory=lambda: {})
 
 
 @json_schema_type
 class UnstructuredLogEvent(EventCommon):
-    type: Literal[EventType.UNSTRUCTURED_LOG.value] = EventType.UNSTRUCTURED_LOG.value
+    type: Literal[EventType.UNSTRUCTURED_LOG] = EventType.UNSTRUCTURED_LOG
     message: str
     severity: LogSeverity
 
 
 @json_schema_type
 class MetricEvent(EventCommon):
-    type: Literal[EventType.METRIC.value] = EventType.METRIC.value
+    type: Literal[EventType.METRIC] = EventType.METRIC
     metric: str  # this would be an enum
-    value: Union[int, float]
+    value: int | float
     unit: str
 
 
 @json_schema_type
 class MetricInResponse(BaseModel):
     metric: str
-    value: Union[int, float]
-    unit: Optional[str] = None
+    value: int | float
+    unit: str | None = None
 
 
 # This is a short term solution to allow inference API to return metrics
@@ -124,7 +120,7 @@ class MetricInResponse(BaseModel):
 
 
 class MetricResponseMixin(BaseModel):
-    metrics: Optional[List[MetricInResponse]] = None
+    metrics: list[MetricInResponse] | None = None
 
 
 @json_schema_type
@@ -135,22 +131,19 @@ class StructuredLogType(Enum):
 
 @json_schema_type
 class SpanStartPayload(BaseModel):
-    type: Literal[StructuredLogType.SPAN_START.value] = StructuredLogType.SPAN_START.value
+    type: Literal[StructuredLogType.SPAN_START] = StructuredLogType.SPAN_START
     name: str
-    parent_span_id: Optional[str] = None
+    parent_span_id: str | None = None
 
 
 @json_schema_type
 class SpanEndPayload(BaseModel):
-    type: Literal[StructuredLogType.SPAN_END.value] = StructuredLogType.SPAN_END.value
+    type: Literal[StructuredLogType.SPAN_END] = StructuredLogType.SPAN_END
     status: SpanStatus
 
 
 StructuredLogPayload = Annotated[
-    Union[
-        SpanStartPayload,
-        SpanEndPayload,
-    ],
+    SpanStartPayload | SpanEndPayload,
     Field(discriminator="type"),
 ]
 register_schema(StructuredLogPayload, name="StructuredLogPayload")
@@ -158,16 +151,12 @@ register_schema(StructuredLogPayload, name="StructuredLogPayload")
 
 @json_schema_type
 class StructuredLogEvent(EventCommon):
-    type: Literal[EventType.STRUCTURED_LOG.value] = EventType.STRUCTURED_LOG.value
+    type: Literal[EventType.STRUCTURED_LOG] = EventType.STRUCTURED_LOG
     payload: StructuredLogPayload
 
 
 Event = Annotated[
-    Union[
-        UnstructuredLogEvent,
-        MetricEvent,
-        StructuredLogEvent,
-    ],
+    UnstructuredLogEvent | MetricEvent | StructuredLogEvent,
     Field(discriminator="type"),
 ]
 register_schema(Event, name="Event")
@@ -184,7 +173,7 @@ class EvalTrace(BaseModel):
 
 @json_schema_type
 class SpanWithStatus(Span):
-    status: Optional[SpanStatus] = None
+    status: SpanStatus | None = None
 
 
 @json_schema_type
@@ -203,15 +192,56 @@ class QueryCondition(BaseModel):
 
 
 class QueryTracesResponse(BaseModel):
-    data: List[Trace]
+    data: list[Trace]
 
 
 class QuerySpansResponse(BaseModel):
-    data: List[Span]
+    data: list[Span]
 
 
 class QuerySpanTreeResponse(BaseModel):
-    data: Dict[str, SpanWithStatus]
+    data: dict[str, SpanWithStatus]
+
+
+class MetricQueryType(Enum):
+    RANGE = "range"
+    INSTANT = "instant"
+
+
+class MetricLabelOperator(Enum):
+    EQUALS = "="
+    NOT_EQUALS = "!="
+    REGEX_MATCH = "=~"
+    REGEX_NOT_MATCH = "!~"
+
+
+class MetricLabelMatcher(BaseModel):
+    name: str
+    value: str
+    operator: MetricLabelOperator = MetricLabelOperator.EQUALS
+
+
+@json_schema_type
+class MetricLabel(BaseModel):
+    name: str
+    value: str
+
+
+@json_schema_type
+class MetricDataPoint(BaseModel):
+    timestamp: int
+    value: float
+
+
+@json_schema_type
+class MetricSeries(BaseModel):
+    metric: str
+    labels: list[MetricLabel]
+    values: list[MetricDataPoint]
+
+
+class QueryMetricsResponse(BaseModel):
+    data: list[MetricSeries]
 
 
 @runtime_checkable
@@ -222,10 +252,10 @@ class Telemetry(Protocol):
     @webmethod(route="/telemetry/traces", method="POST")
     async def query_traces(
         self,
-        attribute_filters: Optional[List[QueryCondition]] = None,
-        limit: Optional[int] = 100,
-        offset: Optional[int] = 0,
-        order_by: Optional[List[str]] = None,
+        attribute_filters: list[QueryCondition] | None = None,
+        limit: int | None = 100,
+        offset: int | None = 0,
+        order_by: list[str] | None = None,
     ) -> QueryTracesResponse: ...
 
     @webmethod(route="/telemetry/traces/{trace_id:path}", method="GET")
@@ -238,23 +268,34 @@ class Telemetry(Protocol):
     async def get_span_tree(
         self,
         span_id: str,
-        attributes_to_return: Optional[List[str]] = None,
-        max_depth: Optional[int] = None,
+        attributes_to_return: list[str] | None = None,
+        max_depth: int | None = None,
     ) -> QuerySpanTreeResponse: ...
 
     @webmethod(route="/telemetry/spans", method="POST")
     async def query_spans(
         self,
-        attribute_filters: List[QueryCondition],
-        attributes_to_return: List[str],
-        max_depth: Optional[int] = None,
+        attribute_filters: list[QueryCondition],
+        attributes_to_return: list[str],
+        max_depth: int | None = None,
     ) -> QuerySpansResponse: ...
 
     @webmethod(route="/telemetry/spans/export", method="POST")
     async def save_spans_to_dataset(
         self,
-        attribute_filters: List[QueryCondition],
-        attributes_to_save: List[str],
+        attribute_filters: list[QueryCondition],
+        attributes_to_save: list[str],
         dataset_id: str,
-        max_depth: Optional[int] = None,
+        max_depth: int | None = None,
     ) -> None: ...
+
+    @webmethod(route="/telemetry/metrics/{metric_name}", method="POST")
+    async def query_metrics(
+        self,
+        metric_name: str,
+        start_time: int,
+        end_time: int | None = None,
+        granularity: str | None = "1d",
+        query_type: MetricQueryType = MetricQueryType.RANGE,
+        label_matchers: list[MetricLabelMatcher] | None = None,
+    ) -> QueryMetricsResponse: ...

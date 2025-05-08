@@ -4,7 +4,7 @@
 # This source code is licensed under the terms described in the LICENSE file in
 # the root directory of this source tree.
 
-from typing import List, Literal, Optional, Protocol, runtime_checkable
+from typing import Literal, Protocol, runtime_checkable
 
 from pydantic import BaseModel
 
@@ -15,7 +15,7 @@ from llama_stack.schema_utils import json_schema_type, webmethod
 
 @json_schema_type
 class VectorDB(Resource):
-    type: Literal[ResourceType.vector_db.value] = ResourceType.vector_db.value
+    type: Literal[ResourceType.vector_db] = ResourceType.vector_db
 
     embedding_model: str
     embedding_dimension: int
@@ -25,7 +25,7 @@ class VectorDB(Resource):
         return self.identifier
 
     @property
-    def provider_vector_db_id(self) -> str:
+    def provider_vector_db_id(self) -> str | None:
         return self.provider_resource_id
 
 
@@ -33,11 +33,11 @@ class VectorDBInput(BaseModel):
     vector_db_id: str
     embedding_model: str
     embedding_dimension: int
-    provider_vector_db_id: Optional[str] = None
+    provider_vector_db_id: str | None = None
 
 
 class ListVectorDBsResponse(BaseModel):
-    data: List[VectorDB]
+    data: list[VectorDB]
 
 
 @runtime_checkable
@@ -57,9 +57,9 @@ class VectorDBs(Protocol):
         self,
         vector_db_id: str,
         embedding_model: str,
-        embedding_dimension: Optional[int] = 384,
-        provider_id: Optional[str] = None,
-        provider_vector_db_id: Optional[str] = None,
+        embedding_dimension: int | None = 384,
+        provider_id: str | None = None,
+        provider_vector_db_id: str | None = None,
     ) -> VectorDB: ...
 
     @webmethod(route="/vector-dbs/{vector_db_id:path}", method="DELETE")

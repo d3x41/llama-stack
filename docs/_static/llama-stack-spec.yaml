@@ -197,11 +197,11 @@ paths:
     get:
       responses:
         '200':
-          description: A ListAgentsResponse.
+          description: A PaginatedResponse.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ListAgentsResponse'
+                $ref: '#/components/schemas/PaginatedResponse'
         '400':
           $ref: '#/components/responses/BadRequest400'
         '429':
@@ -215,7 +215,19 @@ paths:
       tags:
         - Agents
       description: List all agents.
-      parameters: []
+      parameters:
+        - name: start_index
+          in: query
+          description: The index to start the pagination from.
+          required: false
+          schema:
+            type: integer
+        - name: limit
+          in: query
+          description: The number of agents to return.
+          required: false
+          schema:
+            type: integer
     post:
       responses:
         '200':
@@ -465,7 +477,8 @@ paths:
           $ref: '#/components/responses/DefaultError'
       tags:
         - Agents
-      description: Delete an agent by its ID.
+      description: >-
+        Delete an agent by its ID and its associated sessions and turns.
       parameters:
         - name: agent_id
           in: path
@@ -534,7 +547,8 @@ paths:
           $ref: '#/components/responses/DefaultError'
       tags:
         - Agents
-      description: Delete an agent session by its ID.
+      description: >-
+        Delete an agent session by its ID and its associated turns.
       parameters:
         - name: session_id
           in: path
@@ -1662,11 +1676,11 @@ paths:
     get:
       responses:
         '200':
-          description: A ListAgentSessionsResponse.
+          description: A PaginatedResponse.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ListAgentSessionsResponse'
+                $ref: '#/components/schemas/PaginatedResponse'
         '400':
           $ref: '#/components/responses/BadRequest400'
         '429':
@@ -1688,6 +1702,18 @@ paths:
           required: true
           schema:
             type: string
+        - name: start_index
+          in: query
+          description: The index to start the pagination from.
+          required: false
+          schema:
+            type: integer
+        - name: limit
+          in: query
+          description: The number of sessions to return.
+          required: false
+          schema:
+            type: integer
   /v1/eval/benchmarks:
     get:
       responses:
@@ -2371,6 +2397,40 @@ paths:
             schema:
               $ref: '#/components/schemas/QueryChunksRequest'
         required: true
+  /v1/telemetry/metrics/{metric_name}:
+    post:
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QueryMetricsResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest400'
+        '429':
+          $ref: >-
+            #/components/responses/TooManyRequests429
+        '500':
+          $ref: >-
+            #/components/responses/InternalServerError500
+        default:
+          $ref: '#/components/responses/DefaultError'
+      tags:
+        - Telemetry
+      description: ''
+      parameters:
+        - name: metric_name
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QueryMetricsRequest'
+        required: true
   /v1/telemetry/spans:
     post:
       responses:
@@ -2812,10 +2872,13 @@ components:
       properties:
         type:
           type: string
-          const: grammar
-          default: grammar
+          enum:
+            - json_schema
+            - grammar
           description: >-
             Must be "grammar" to identify this format type
+          const: grammar
+          default: grammar
         bnf:
           type: object
           additionalProperties:
@@ -2897,10 +2960,13 @@ components:
       properties:
         type:
           type: string
-          const: json_schema
-          default: json_schema
+          enum:
+            - json_schema
+            - grammar
           description: >-
             Must be "json_schema" to identify this format type
+          const: json_schema
+          default: json_schema
         json_schema:
           type: object
           additionalProperties:
@@ -3959,6 +4025,13 @@ components:
           description: The time the step completed.
         step_type:
           type: string
+          enum:
+            - inference
+            - tool_execution
+            - shield_call
+            - memory_retrieval
+          title: StepType
+          description: Type of the step in an agent turn.
           const: inference
           default: inference
         model_response:
@@ -3991,6 +4064,13 @@ components:
           description: The time the step completed.
         step_type:
           type: string
+          enum:
+            - inference
+            - tool_execution
+            - shield_call
+            - memory_retrieval
+          title: StepType
+          description: Type of the step in an agent turn.
           const: memory_retrieval
           default: memory_retrieval
         vector_db_ids:
@@ -4052,6 +4132,13 @@ components:
           description: The time the step completed.
         step_type:
           type: string
+          enum:
+            - inference
+            - tool_execution
+            - shield_call
+            - memory_retrieval
+          title: StepType
+          description: Type of the step in an agent turn.
           const: shield_call
           default: shield_call
         violation:
@@ -4083,6 +4170,13 @@ components:
           description: The time the step completed.
         step_type:
           type: string
+          enum:
+            - inference
+            - tool_execution
+            - shield_call
+            - memory_retrieval
+          title: StepType
+          description: Type of the step in an agent turn.
           const: tool_execution
           default: tool_execution
         tool_calls:
@@ -4245,6 +4339,14 @@ components:
       properties:
         event_type:
           type: string
+          enum:
+            - step_start
+            - step_complete
+            - step_progress
+            - turn_start
+            - turn_complete
+            - turn_awaiting_input
+          title: AgentTurnResponseEventType
           const: step_complete
           default: step_complete
         step_type:
@@ -4283,6 +4385,14 @@ components:
       properties:
         event_type:
           type: string
+          enum:
+            - step_start
+            - step_complete
+            - step_progress
+            - turn_start
+            - turn_complete
+            - turn_awaiting_input
+          title: AgentTurnResponseEventType
           const: step_progress
           default: step_progress
         step_type:
@@ -4310,6 +4420,14 @@ components:
       properties:
         event_type:
           type: string
+          enum:
+            - step_start
+            - step_complete
+            - step_progress
+            - turn_start
+            - turn_complete
+            - turn_awaiting_input
+          title: AgentTurnResponseEventType
           const: step_start
           default: step_start
         step_type:
@@ -4354,6 +4472,14 @@ components:
       properties:
         event_type:
           type: string
+          enum:
+            - step_start
+            - step_complete
+            - step_progress
+            - turn_start
+            - turn_complete
+            - turn_awaiting_input
+          title: AgentTurnResponseEventType
           const: turn_awaiting_input
           default: turn_awaiting_input
         turn:
@@ -4369,6 +4495,14 @@ components:
       properties:
         event_type:
           type: string
+          enum:
+            - step_start
+            - step_complete
+            - step_progress
+            - turn_start
+            - turn_complete
+            - turn_awaiting_input
+          title: AgentTurnResponseEventType
           const: turn_complete
           default: turn_complete
         turn:
@@ -4383,6 +4517,14 @@ components:
       properties:
         event_type:
           type: string
+          enum:
+            - step_start
+            - step_complete
+            - step_progress
+            - turn_start
+            - turn_complete
+            - turn_awaiting_input
+          title: AgentTurnResponseEventType
           const: turn_start
           default: turn_start
         turn_id:
@@ -4506,6 +4648,8 @@ components:
           type: boolean
         stream:
           type: boolean
+        temperature:
+          type: number
         tools:
           type: array
           items:
@@ -4823,7 +4967,7 @@ components:
       type: object
       properties:
         type:
-          type: string
+          $ref: '#/components/schemas/ScoringFnParamsType'
           const: basic
           default: basic
         aggregation_functions:
@@ -4833,6 +4977,7 @@ components:
       additionalProperties: false
       required:
         - type
+        - aggregation_functions
       title: BasicScoringFnParams
     BenchmarkConfig:
       type: object
@@ -4872,7 +5017,7 @@ components:
       type: object
       properties:
         type:
-          type: string
+          $ref: '#/components/schemas/ScoringFnParamsType'
           const: llm_as_judge
           default: llm_as_judge
         judge_model:
@@ -4891,6 +5036,8 @@ components:
       required:
         - type
         - judge_model
+        - judge_score_regexes
+        - aggregation_functions
       title: LLMAsJudgeScoringFnParams
     ModelCandidate:
       type: object
@@ -4921,7 +5068,7 @@ components:
       type: object
       properties:
         type:
-          type: string
+          $ref: '#/components/schemas/ScoringFnParamsType'
           const: regex_parser
           default: regex_parser
         parsing_regexes:
@@ -4935,6 +5082,8 @@ components:
       additionalProperties: false
       required:
         - type
+        - parsing_regexes
+        - aggregation_functions
       title: RegexParserScoringFnParams
     ScoringFnParams:
       oneOf:
@@ -4947,6 +5096,13 @@ components:
           llm_as_judge: '#/components/schemas/LLMAsJudgeScoringFnParams'
           regex_parser: '#/components/schemas/RegexParserScoringFnParams'
           basic: '#/components/schemas/BasicScoringFnParams'
+    ScoringFnParamsType:
+      type: string
+      enum:
+        - llm_as_judge
+        - regex_parser
+        - basic
+      title: ScoringFnParamsType
     EvaluateRowsRequest:
       type: object
       properties:
@@ -5109,6 +5265,16 @@ components:
           type: string
         type:
           type: string
+          enum:
+            - model
+            - shield
+            - vector_db
+            - dataset
+            - scoring_function
+            - benchmark
+            - tool
+            - tool_group
+          title: ResourceType
           const: benchmark
           default: benchmark
         dataset_id:
@@ -5130,7 +5296,6 @@ components:
       additionalProperties: false
       required:
         - identifier
-        - provider_resource_id
         - provider_id
         - type
         - dataset_id
@@ -5157,6 +5322,16 @@ components:
           type: string
         type:
           type: string
+          enum:
+            - model
+            - shield
+            - vector_db
+            - dataset
+            - scoring_function
+            - benchmark
+            - tool
+            - tool_group
+          title: ResourceType
           const: dataset
           default: dataset
         purpose:
@@ -5183,7 +5358,6 @@ components:
       additionalProperties: false
       required:
         - identifier
-        - provider_resource_id
         - provider_id
         - type
         - purpose
@@ -5282,6 +5456,16 @@ components:
           type: string
         type:
           type: string
+          enum:
+            - model
+            - shield
+            - vector_db
+            - dataset
+            - scoring_function
+            - benchmark
+            - tool
+            - tool_group
+          title: ResourceType
           const: model
           default: model
         metadata:
@@ -5300,7 +5484,6 @@ components:
       additionalProperties: false
       required:
         - identifier
-        - provider_resource_id
         - provider_id
         - type
         - metadata
@@ -5436,6 +5619,16 @@ components:
           type: string
         type:
           type: string
+          enum:
+            - model
+            - shield
+            - vector_db
+            - dataset
+            - scoring_function
+            - benchmark
+            - tool
+            - tool_group
+          title: ResourceType
           const: scoring_function
           default: scoring_function
         description:
@@ -5457,7 +5650,6 @@ components:
       additionalProperties: false
       required:
         - identifier
-        - provider_resource_id
         - provider_id
         - type
         - metadata
@@ -5496,6 +5688,16 @@ components:
           type: string
         type:
           type: string
+          enum:
+            - model
+            - shield
+            - vector_db
+            - dataset
+            - scoring_function
+            - benchmark
+            - tool
+            - tool_group
+          title: ResourceType
           const: shield
           default: shield
         params:
@@ -5511,7 +5713,6 @@ components:
       additionalProperties: false
       required:
         - identifier
-        - provider_resource_id
         - provider_id
         - type
       title: Shield
@@ -5626,6 +5827,16 @@ components:
           type: string
         type:
           type: string
+          enum:
+            - model
+            - shield
+            - vector_db
+            - dataset
+            - scoring_function
+            - benchmark
+            - tool
+            - tool_group
+          title: ResourceType
           const: tool
           default: tool
         toolgroup_id:
@@ -5651,7 +5862,6 @@ components:
       additionalProperties: false
       required:
         - identifier
-        - provider_resource_id
         - provider_id
         - type
         - toolgroup_id
@@ -5677,6 +5887,16 @@ components:
           type: string
         type:
           type: string
+          enum:
+            - model
+            - shield
+            - vector_db
+            - dataset
+            - scoring_function
+            - benchmark
+            - tool
+            - tool_group
+          title: ResourceType
           const: tool_group
           default: tool_group
         mcp_endpoint:
@@ -5694,7 +5914,6 @@ components:
       additionalProperties: false
       required:
         - identifier
-        - provider_resource_id
         - provider_id
         - type
       title: ToolGroup
@@ -5808,6 +6027,16 @@ components:
           type: string
         type:
           type: string
+          enum:
+            - model
+            - shield
+            - vector_db
+            - dataset
+            - scoring_function
+            - benchmark
+            - tool
+            - tool_group
+          title: ResourceType
           const: vector_db
           default: vector_db
         embedding_model:
@@ -5817,7 +6046,6 @@ components:
       additionalProperties: false
       required:
         - identifier
-        - provider_resource_id
         - provider_id
         - type
         - embedding_model
@@ -6049,28 +6277,6 @@ components:
         - job_id
         - status
       title: Job
-    ListAgentSessionsResponse:
-      type: object
-      properties:
-        data:
-          type: array
-          items:
-            $ref: '#/components/schemas/Session'
-      additionalProperties: false
-      required:
-        - data
-      title: ListAgentSessionsResponse
-    ListAgentsResponse:
-      type: object
-      properties:
-        data:
-          type: array
-          items:
-            $ref: '#/components/schemas/Agent'
-      additionalProperties: false
-      required:
-        - data
-      title: ListAgentsResponse
     BucketResponse:
       type: object
       properties:
@@ -6257,6 +6463,13 @@ components:
           unstructured_log: '#/components/schemas/UnstructuredLogEvent'
           metric: '#/components/schemas/MetricEvent'
           structured_log: '#/components/schemas/StructuredLogEvent'
+    EventType:
+      type: string
+      enum:
+        - unstructured_log
+        - structured_log
+        - metric
+      title: EventType
     LogSeverity:
       type: string
       enum:
@@ -6287,7 +6500,7 @@ components:
               - type: boolean
               - type: 'null'
         type:
-          type: string
+          $ref: '#/components/schemas/EventType'
           const: metric
           default: metric
         metric:
@@ -6312,7 +6525,7 @@ components:
       type: object
       properties:
         type:
-          type: string
+          $ref: '#/components/schemas/StructuredLogType'
           const: span_end
           default: span_end
         status:
@@ -6326,7 +6539,7 @@ components:
       type: object
       properties:
         type:
-          type: string
+          $ref: '#/components/schemas/StructuredLogType'
           const: span_start
           default: span_start
         name:
@@ -6358,7 +6571,7 @@ components:
               - type: boolean
               - type: 'null'
         type:
-          type: string
+          $ref: '#/components/schemas/EventType'
           const: structured_log
           default: structured_log
         payload:
@@ -6380,6 +6593,12 @@ components:
         mapping:
           span_start: '#/components/schemas/SpanStartPayload'
           span_end: '#/components/schemas/SpanEndPayload'
+    StructuredLogType:
+      type: string
+      enum:
+        - span_start
+        - span_end
+      title: StructuredLogType
     UnstructuredLogEvent:
       type: object
       properties:
@@ -6400,7 +6619,7 @@ components:
               - type: boolean
               - type: 'null'
         type:
-          type: string
+          $ref: '#/components/schemas/EventType'
           const: unstructured_log
           default: unstructured_log
         message:
@@ -7577,6 +7796,104 @@ components:
         - chunks
         - scores
       title: QueryChunksResponse
+    QueryMetricsRequest:
+      type: object
+      properties:
+        start_time:
+          type: integer
+        end_time:
+          type: integer
+        granularity:
+          type: string
+        query_type:
+          type: string
+          enum:
+            - range
+            - instant
+          title: MetricQueryType
+        label_matchers:
+          type: array
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+              value:
+                type: string
+              operator:
+                type: string
+                enum:
+                  - '='
+                  - '!='
+                  - =~
+                  - '!~'
+                title: MetricLabelOperator
+                default: '='
+            additionalProperties: false
+            required:
+              - name
+              - value
+              - operator
+            title: MetricLabelMatcher
+      additionalProperties: false
+      required:
+        - start_time
+        - query_type
+      title: QueryMetricsRequest
+    MetricDataPoint:
+      type: object
+      properties:
+        timestamp:
+          type: integer
+        value:
+          type: number
+      additionalProperties: false
+      required:
+        - timestamp
+        - value
+      title: MetricDataPoint
+    MetricLabel:
+      type: object
+      properties:
+        name:
+          type: string
+        value:
+          type: string
+      additionalProperties: false
+      required:
+        - name
+        - value
+      title: MetricLabel
+    MetricSeries:
+      type: object
+      properties:
+        metric:
+          type: string
+        labels:
+          type: array
+          items:
+            $ref: '#/components/schemas/MetricLabel'
+        values:
+          type: array
+          items:
+            $ref: '#/components/schemas/MetricDataPoint'
+      additionalProperties: false
+      required:
+        - metric
+        - labels
+        - values
+      title: MetricSeries
+    QueryMetricsResponse:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/MetricSeries'
+      additionalProperties: false
+      required:
+        - data
+      title: QueryMetricsResponse
     QueryCondition:
       type: object
       properties:

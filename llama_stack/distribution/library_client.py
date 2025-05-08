@@ -12,7 +12,7 @@ import os
 from concurrent.futures import ThreadPoolExecutor
 from enum import Enum
 from pathlib import Path
-from typing import Any, Optional, TypeVar, Union, get_args, get_origin
+from typing import Any, TypeVar, Union, get_args, get_origin
 
 import httpx
 import yaml
@@ -30,7 +30,7 @@ from termcolor import cprint
 
 from llama_stack.distribution.build import print_pip_install_help
 from llama_stack.distribution.configure import parse_and_maybe_upgrade_config
-from llama_stack.distribution.datatypes import Api
+from llama_stack.distribution.datatypes import Api, BuildConfig, DistributionSpec
 from llama_stack.distribution.request_headers import (
     PROVIDER_DATA_VAR,
     request_provider_data_context,
@@ -119,8 +119,8 @@ class LlamaStackAsLibraryClient(LlamaStackClient):
         self,
         config_path_or_template_name: str,
         skip_logger_removal: bool = False,
-        custom_provider_registry: Optional[ProviderRegistry] = None,
-        provider_data: Optional[dict[str, Any]] = None,
+        custom_provider_registry: ProviderRegistry | None = None,
+        provider_data: dict[str, Any] | None = None,
     ):
         super().__init__()
         self.async_client = AsyncLlamaStackAsLibraryClient(
@@ -181,8 +181,8 @@ class AsyncLlamaStackAsLibraryClient(AsyncLlamaStackClient):
     def __init__(
         self,
         config_path_or_template_name: str,
-        custom_provider_registry: Optional[ProviderRegistry] = None,
-        provider_data: Optional[dict[str, Any]] = None,
+        custom_provider_registry: ProviderRegistry | None = None,
+        provider_data: dict[str, Any] | None = None,
     ):
         super().__init__()
         # when using the library client, we should not log to console since many
@@ -216,7 +216,18 @@ class AsyncLlamaStackAsLibraryClient(AsyncLlamaStackClient):
                 "yellow",
             )
             if self.config_path_or_template_name.endswith(".yaml"):
-                print_pip_install_help(self.config.providers)
+                # Convert Provider objects to their types
+                provider_types: dict[str, str | list[str]] = {}
+                for api, providers in self.config.providers.items():
+                    types = [p.provider_type for p in providers]
+                    # Convert single-item lists to strings
+                    provider_types[api] = types[0] if len(types) == 1 else types
+                build_config = BuildConfig(
+                    distribution_spec=DistributionSpec(
+                        providers=provider_types,
+                    ),
+                )
+                print_pip_install_help(build_config)
             else:
                 prefix = "!" if in_notebook() else ""
                 cprint(
@@ -371,7 +382,7 @@ class AsyncLlamaStackAsLibraryClient(AsyncLlamaStackClient):
         )
         return await response.parse()
 
-    def _convert_body(self, path: str, method: str, body: Optional[dict] = None) -> dict:
+    def _convert_body(self, path: str, method: str, body: dict | None = None) -> dict:
         if not body:
             return {}
 

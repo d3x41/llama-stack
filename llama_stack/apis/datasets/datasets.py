@@ -5,7 +5,7 @@
 # the root directory of this source tree.
 
 from enum import Enum
-from typing import Annotated, Any, Dict, List, Literal, Optional, Protocol, Union
+from typing import Annotated, Any, Literal, Protocol
 
 from pydantic import BaseModel, Field
 
@@ -81,11 +81,11 @@ class RowsDataSource(BaseModel):
     """
 
     type: Literal["rows"] = "rows"
-    rows: List[Dict[str, Any]]
+    rows: list[dict[str, Any]]
 
 
 DataSource = Annotated[
-    Union[URIDataSource, RowsDataSource],
+    URIDataSource | RowsDataSource,
     Field(discriminator="type"),
 ]
 register_schema(DataSource, name="DataSource")
@@ -98,7 +98,7 @@ class CommonDatasetFields(BaseModel):
 
     purpose: DatasetPurpose
     source: DataSource
-    metadata: Dict[str, Any] = Field(
+    metadata: dict[str, Any] = Field(
         default_factory=dict,
         description="Any additional metadata for this dataset",
     )
@@ -106,14 +106,14 @@ class CommonDatasetFields(BaseModel):
 
 @json_schema_type
 class Dataset(CommonDatasetFields, Resource):
-    type: Literal[ResourceType.dataset.value] = ResourceType.dataset.value
+    type: Literal[ResourceType.dataset] = ResourceType.dataset
 
     @property
     def dataset_id(self) -> str:
         return self.identifier
 
     @property
-    def provider_dataset_id(self) -> str:
+    def provider_dataset_id(self) -> str | None:
         return self.provider_resource_id
 
 
@@ -122,7 +122,7 @@ class DatasetInput(CommonDatasetFields, BaseModel):
 
 
 class ListDatasetsResponse(BaseModel):
-    data: List[Dataset]
+    data: list[Dataset]
 
 
 class Datasets(Protocol):
@@ -131,8 +131,8 @@ class Datasets(Protocol):
         self,
         purpose: DatasetPurpose,
         source: DataSource,
-        metadata: Optional[Dict[str, Any]] = None,
-        dataset_id: Optional[str] = None,
+        metadata: dict[str, Any] | None = None,
+        dataset_id: str | None = None,
     ) -> Dataset:
         """
         Register a new dataset.

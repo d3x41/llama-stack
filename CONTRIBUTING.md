@@ -116,7 +116,13 @@ You can run the unit tests by running:
 
 ```bash
 source .venv/bin/activate
-./scripts/unit-tests.sh
+./scripts/unit-tests.sh [PYTEST_ARGS]
+```
+
+Any additional arguments are passed to pytest. For example, you can specify a test directory, a specific test file, or any pytest flags (e.g., -vvv for verbosity). If no test directory is specified, it defaults to "tests/unit", e.g:
+
+```bash
+./scripts/unit-tests.sh tests/unit/registry/test_registry.py -vvv
 ```
 
 If you'd like to run for a non-default version of Python (currently 3.10), pass `PYTHON_VERSION` variable as follows:
@@ -141,11 +147,20 @@ uv sync
 
 ## Coding Style
 
-* Comments should provide meaningful insights into the code. Avoid filler comments that simply describe the next step, as they create unnecessary clutter, same goes for docstrings.
-* Prefer comments to clarify surprising behavior and/or relationships between parts of the code rather than explain what the next line of code does.
-* Catching exceptions, prefer using a specific exception type rather than a broad catch-all like `Exception`.
+* Comments should provide meaningful insights into the code. Avoid filler comments that simply
+  describe the next step, as they create unnecessary clutter, same goes for docstrings.
+* Prefer comments to clarify surprising behavior and/or relationships between parts of the code
+  rather than explain what the next line of code does.
+* Catching exceptions, prefer using a specific exception type rather than a broad catch-all like
+  `Exception`.
 * Error messages should be prefixed with "Failed to ..."
-* 4 spaces for indentation rather than tabs
+* 4 spaces for indentation rather than tab
+* When using `# noqa` to suppress a style or linter warning, include a comment explaining the
+  justification for bypassing the check.
+* When using `# type: ignore` to suppress a mypy warning, include a comment explaining the
+  justification for bypassing the check.
+* Don't use unicode characters in the codebase. ASCII-only is preferred for compatibility or
+  readability reasons.
 
 ## Common Tasks
 
