@@ -13,7 +13,6 @@ import sys
 import textwrap
 from functools import lru_cache
 from pathlib import Path
-from typing import Dict, Optional
 
 import yaml
 from prompt_toolkit import prompt
@@ -37,7 +36,8 @@ from llama_stack.distribution.datatypes import (
 )
 from llama_stack.distribution.distribution import get_provider_registry
 from llama_stack.distribution.resolver import InvalidProviderError
-from llama_stack.distribution.utils.config_dirs import DISTRIBS_BASE_DIR
+from llama_stack.distribution.stack import replace_env_vars
+from llama_stack.distribution.utils.config_dirs import DISTRIBS_BASE_DIR, EXTERNAL_PROVIDERS_DIR
 from llama_stack.distribution.utils.dynamic import instantiate_class_type
 from llama_stack.distribution.utils.exec import formulate_run_args, run_command
 from llama_stack.distribution.utils.image_types import LlamaStackImageType
@@ -46,14 +46,14 @@ from llama_stack.providers.datatypes import Api
 TEMPLATES_PATH = Path(__file__).parent.parent.parent / "templates"
 
 
-@lru_cache()
-def available_templates_specs() -> Dict[str, BuildConfig]:
+@lru_cache
+def available_templates_specs() -> dict[str, BuildConfig]:
     import yaml
 
     template_specs = {}
     for p in TEMPLATES_PATH.rglob("*build.yaml"):
         template_name = p.parent.name
-        with open(p, "r") as f:
+        with open(p) as f:
             build_config = BuildConfig(**yaml.safe_load(f))
             template_specs[template_name] = build_config
     return template_specs
@@ -178,7 +178,7 @@ def run_stack_build_command(args: argparse.Namespace) -> None:
             if not available_providers:
                 continue
             api_provider = prompt(
-                "> Enter provider for API {}: ".format(api.value),
+                f"> Enter provider for API {api.value}: ",
                 completer=WordCompleter(available_providers),
                 complete_while_typing=True,
                 validator=Validator.from_callable(
@@ -201,9 +201,13 @@ def run_stack_build_command(args: argparse.Namespace) -> None:
 
         build_config = BuildConfig(image_type=image_type, distribution_spec=distribution_spec)
     else:
-        with open(args.config, "r") as f:
+        with open(args.config) as f:
             try:
-                build_config = BuildConfig(**yaml.safe_load(f))
+                contents = yaml.safe_load(f)
+                contents = replace_env_vars(contents)
+                build_config = BuildConfig(**contents)
+                if args.image_type:
+                    build_config.image_type = args.image_type
             except Exception as e:
                 cprint(
                     f"Could not parse config file {args.config}: {e}",
@@ -249,8 +253,10 @@ def run_stack_build_command(args: argparse.Namespace) -> None:
         run_config = Path(run_config)
         config_dict = yaml.safe_load(run_config.read_text())
         config = parse_and_maybe_upgrade_config(config_dict)
+        if not os.path.exists(str(config.external_providers_dir)):
+            os.makedirs(str(config.external_providers_dir), exist_ok=True)
         run_args = formulate_run_args(args.image_type, args.image_name, config, args.template)
-        run_args.extend([run_config, str(os.getenv("LLAMA_STACK_PORT", 8321))])
+        run_args.extend([str(os.getenv("LLAMA_STACK_PORT", 8321)), "--config", run_config])
         run_command(run_args)
 
 
@@ -268,7 +274,9 @@ def _generate_run_config(
         image_name=image_name,
         apis=apis,
         providers={},
-        external_providers_dir=build_config.external_providers_dir if build_config.external_providers_dir else None,
+        external_providers_dir=build_config.external_providers_dir
+        if build_config.external_providers_dir
+        else EXTERNAL_PROVIDERS_DIR,
     )
     # build providers dict
     provider_registry = get_provider_registry(build_config)
@@ -332,9 +340,9 @@ def _generate_run_config(
 
 def _run_stack_build_command_from_build_config(
     build_config: BuildConfig,
-    image_name: Optional[str] = None,
-    template_name: Optional[str] = None,
-    config_path: Optional[str] = None,
+    image_name: str | None = None,
+    template_name: str | None = None,
+    config_path: str | None = None,
 ) -> str:
     image_name = image_name or build_config.image_name
     if build_config.image_type == LlamaStackImageType.CONTAINER.value:

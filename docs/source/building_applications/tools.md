@@ -43,27 +43,6 @@ The tool requires an API key which can be provided either in the configuration o
 
 > **NOTE:** When using Tavily Search and Bing Search, the inference output will still display "Brave Search." This is because Llama models have been trained with Brave Search as a built-in tool. Tavily and bing is just being used in lieu of Brave search.
 
-#### Code Interpreter
-
-The Code Interpreter allows execution of Python code within a controlled environment.
-
-```python
-# Register Code Interpreter tool group
-client.toolgroups.register(
-    toolgroup_id="builtin::code_interpreter", provider_id="code_interpreter"
-)
-```
-
-Features:
-- Secure execution environment using `bwrap` sandboxing
-- Matplotlib support for generating plots
-- Disabled dangerous system operations
-- Configurable execution timeouts
-
-> ⚠️ Important: The code interpreter tool can operate in a controlled environment locally or on Podman containers. To ensure proper functionality in containerized environments:
-> - The container requires privileged access (e.g., --privileged).
-> - Users without sufficient permissions may encounter permission errors. (`bwrap: Can't mount devpts on /newroot/dev/pts: Permission denied`)
-> - 🔒 Security Warning: Privileged mode grants elevated access and bypasses security restrictions. Use only in local, isolated, or controlled environments.
 
 #### WolframAlpha
 
@@ -102,7 +81,7 @@ Features:
 - Context retrieval with token limits
 
 
-> **Note:** By default, llama stack run.yaml defines toolgroups for web search, code interpreter and rag, that are provided by tavily-search, code-interpreter and rag providers.
+> **Note:** By default, llama stack run.yaml defines toolgroups for web search, wolfram alpha and rag, that are provided by tavily-search, wolfram-alpha and rag providers.
 
 ## Model Context Protocol (MCP) Tools
 
@@ -186,34 +165,6 @@ all_tools = client.tools.list_tools()
 group_tools = client.tools.list_tools(toolgroup_id="search_tools")
 ```
 
-## Simple Example: Using an Agent with the Code-Interpreter Tool
-
-```python
-from llama_stack_client import Agent
-
-# Instantiate the AI agent with the given configuration
-agent = Agent(
-    client,
-    name="code-interpreter",
-    description="A code interpreter agent for executing Python code snippets",
-    instructions="""
-    You are a highly reliable, concise, and precise assistant.
-    Always show the generated code, never generate your own code, and never anticipate results.
-    """,
-    model="meta-llama/Llama-3.2-3B-Instruct",
-    tools=["builtin::code_interpreter"],
-    max_infer_iters=5,
-)
-
-# Start a session
-session_id = agent.create_session("tool_session")
-
-# Send a query to the AI agent for code execution
-response = agent.create_turn(
-    messages=[{"role": "user", "content": "Run this code: print(3 ** 4 - 5 * 2)"}],
-    session_id=session_id,
-)
-```
 ## Simple Example 2: Using an Agent with the Web Search Tool
 1. Start by registering a Tavily API key at [Tavily](https://tavily.com/).
 2. [Optional] Provide the API key directly to the Llama Stack server

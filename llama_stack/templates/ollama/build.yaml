@@ -23,10 +23,11 @@ distribution_spec:
     - inline::basic
     - inline::llm-as-judge
     - inline::braintrust
+    post_training:
+    - inline::huggingface
     tool_runtime:
     - remote::brave-search
     - remote::tavily-search
-    - inline::code-interpreter
     - inline::rag-runtime
     - remote::model-context-protocol
     - remote::wolfram-alpha

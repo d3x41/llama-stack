@@ -9,14 +9,16 @@ import asyncio
 import inspect
 import json
 import os
+import ssl
 import sys
 import traceback
 import warnings
 from contextlib import asynccontextmanager
 from importlib.metadata import version as parse_version
 from pathlib import Path
-from typing import Any, List, Optional, Union
+from typing import Annotated, Any
 
+import rich.pretty
 import yaml
 from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi import Path as FastapiPath
@@ -24,7 +26,6 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, StreamingResponse
 from openai import BadRequestError
 from pydantic import BaseModel, ValidationError
-from typing_extensions import Annotated
 
 from llama_stack.distribution.datatypes import LoggingConfig, StackRunConfig
 from llama_stack.distribution.distribution import builtin_automatically_routed_apis
@@ -91,7 +92,7 @@ async def global_exception_handler(request: Request, exc: Exception):
     return JSONResponse(status_code=http_exc.status_code, content={"error": {"detail": http_exc.detail}})
 
 
-def translate_exception(exc: Exception) -> Union[HTTPException, RequestValidationError]:
+def translate_exception(exc: Exception) -> HTTPException | RequestValidationError:
     if isinstance(exc, ValidationError):
         exc = RequestValidationError(exc.errors())
 
@@ -115,7 +116,7 @@ def translate_exception(exc: Exception) -> Union[HTTPException, RequestValidatio
         return HTTPException(status_code=400, detail=str(exc))
     elif isinstance(exc, PermissionError):
         return HTTPException(status_code=403, detail=f"Permission denied: {str(exc)}")
-    elif isinstance(exc, TimeoutError):
+    elif isinstance(exc, asyncio.TimeoutError | TimeoutError):
         return HTTPException(status_code=504, detail=f"Operation timed out: {str(exc)}")
     elif isinstance(exc, NotImplementedError):
         return HTTPException(status_code=501, detail=f"Not implemented: {str(exc)}")
@@ -140,7 +141,7 @@ async def shutdown(app):
                 await asyncio.wait_for(impl.shutdown(), timeout=5)
             else:
                 logger.warning("No shutdown method for %s", impl_name)
-        except asyncio.TimeoutError:
+        except (asyncio.TimeoutError, TimeoutError):
             logger.exception("Shutdown timeout for %s ", impl_name, exc_info=True)
         except (Exception, asyncio.CancelledError) as e:
             logger.exception("Failed to shutdown %s: %s", impl_name, {e})
@@ -187,10 +188,29 @@ async def sse_generator(event_gen_coroutine):
         )
 
 
+async def log_request_pre_validation(request: Request):
+    if request.method in ("POST", "PUT", "PATCH"):
+        try:
+            body_bytes = await request.body()
+            if body_bytes:
+                try:
+                    parsed_body = json.loads(body_bytes.decode())
+                    log_output = rich.pretty.pretty_repr(parsed_body)
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    log_output = repr(body_bytes)
+                logger.debug(f"Incoming raw request body for {request.method} {request.url.path}:\n{log_output}")
+            else:
+                logger.debug(f"Incoming {request.method} {request.url.path} request with empty body.")
+        except Exception as e:
+            logger.warning(f"Could not read or log request body for {request.method} {request.url.path}: {e}")
+
+
 def create_dynamic_typed_route(func: Any, method: str, route: str):
     async def endpoint(request: Request, **kwargs):
         # Get auth attributes from the request scope
         user_attributes = request.scope.get("user_attributes", {})
+
+        await log_request_pre_validation(request)
 
         # Use context manager with both provider data and auth attributes
         with request_provider_data_context(request.headers, user_attributes):
@@ -315,7 +335,7 @@ class ClientVersionMiddleware:
         return await self.app(scope, receive, send)
 
 
-def main(args: Optional[argparse.Namespace] = None):
+def main(args: argparse.Namespace | None = None):
     """Start the LlamaStack server."""
     parser = argparse.ArgumentParser(description="Start the LlamaStack server.")
     parser.add_argument(
@@ -338,21 +358,10 @@ def main(args: Optional[argparse.Namespace] = None):
         default=int(os.getenv("LLAMA_STACK_PORT", 8321)),
         help="Port to listen on",
     )
-    parser.add_argument("--disable-ipv6", action="store_true", help="Whether to disable IPv6 support")
     parser.add_argument(
         "--env",
         action="append",
         help="Environment variables in KEY=value format. Can be specified multiple times.",
-    )
-    parser.add_argument(
-        "--tls-keyfile",
-        help="Path to TLS key file for HTTPS",
-        required="--tls-certfile" in sys.argv,
-    )
-    parser.add_argument(
-        "--tls-certfile",
-        help="Path to TLS certificate file for HTTPS",
-        required="--tls-keyfile" in sys.argv,
     )
 
     # Determine whether the server args are being passed by the "run" command, if this is the case
@@ -362,9 +371,9 @@ def main(args: Optional[argparse.Namespace] = None):
         args = parser.parse_args()
 
     # Check for deprecated argument usage
-    if "--yaml-config" in sys.argv:
+    if "--config" in sys.argv:
         warnings.warn(
-            "The '--yaml-config' argument is deprecated and will be removed in a future version. Use '--config' instead.",
+            "The '--config' argument is deprecated and will be removed in a future version. Use '--config' instead.",
             DeprecationWarning,
             stacklevel=2,
         )
@@ -382,10 +391,10 @@ def main(args: Optional[argparse.Namespace] = None):
             raise ValueError(f"Template {args.template} does not exist")
         log_line = f"Using template {args.template} config file: {config_file}"
     else:
-        raise ValueError("Either --yaml-config or --template must be provided")
+        raise ValueError("Either --config or --template must be provided")
 
     logger_config = None
-    with open(config_file, "r") as fp:
+    with open(config_file) as fp:
         config_contents = yaml.safe_load(fp)
         if isinstance(config_contents, dict) and (cfg := config_contents.get("logging_config")):
             logger_config = LoggingConfig(**cfg)
@@ -487,21 +496,24 @@ def main(args: Optional[argparse.Namespace] = None):
     port = args.port or config.server.port
 
     ssl_config = None
-    if args.tls_keyfile:
-        keyfile = args.tls_keyfile
-        certfile = args.tls_certfile
-    else:
-        keyfile = config.server.tls_keyfile
-        certfile = config.server.tls_certfile
+    keyfile = config.server.tls_keyfile
+    certfile = config.server.tls_certfile
 
     if keyfile and certfile:
         ssl_config = {
             "ssl_keyfile": keyfile,
             "ssl_certfile": certfile,
         }
-        logger.info(f"HTTPS enabled with certificates:\n  Key: {keyfile}\n  Cert: {certfile}")
+        if config.server.tls_cafile:
+            ssl_config["ssl_ca_certs"] = config.server.tls_cafile
+            ssl_config["ssl_cert_reqs"] = ssl.CERT_REQUIRED
+            logger.info(
+                f"HTTPS enabled with certificates:\n  Key: {keyfile}\n  Cert: {certfile}\n  CA: {config.server.tls_cafile}"
+            )
+        else:
+            logger.info(f"HTTPS enabled with certificates:\n  Key: {keyfile}\n  Cert: {certfile}")
 
-    listen_host = ["::", "0.0.0.0"] if not args.disable_ipv6 else "0.0.0.0"
+    listen_host = config.server.host or ["::", "0.0.0.0"]
     logger.info(f"Listening on {listen_host}:{port}")
 
     uvicorn_config = {
@@ -517,7 +529,7 @@ def main(args: Optional[argparse.Namespace] = None):
     uvicorn.run(**uvicorn_config)
 
 
-def extract_path_params(route: str) -> List[str]:
+def extract_path_params(route: str) -> list[str]:
     segments = route.split("/")
     params = [seg[1:-1] for seg in segments if seg.startswith("{") and seg.endswith("}")]
     # to handle path params like {param:path}

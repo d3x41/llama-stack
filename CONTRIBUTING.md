@@ -110,25 +110,9 @@ uv run pre-commit run --all-files
 > [!CAUTION]
 > Before pushing your changes, make sure that the pre-commit hooks have passed successfully.
 
-## Running unit tests
+## Running tests
 
-You can run the unit tests by running:
-
-```bash
-source .venv/bin/activate
-./scripts/unit-tests.sh
-```
-
-If you'd like to run for a non-default version of Python (currently 3.10), pass `PYTHON_VERSION` variable as follows:
-
-```
-source .venv/bin/activate
-PYTHON_VERSION=3.13 ./scripts/unit-tests.sh
-```
-
-## Running integration tests
-
-You can run integration tests following the instructions [here](tests/integration/README.md).
+You can find the Llama Stack testing documentation here [here](tests/README.md).
 
 ## Adding a new dependency to the project
 
@@ -141,11 +125,20 @@ uv sync
 
 ## Coding Style
 
-* Comments should provide meaningful insights into the code. Avoid filler comments that simply describe the next step, as they create unnecessary clutter, same goes for docstrings.
-* Prefer comments to clarify surprising behavior and/or relationships between parts of the code rather than explain what the next line of code does.
-* Catching exceptions, prefer using a specific exception type rather than a broad catch-all like `Exception`.
+* Comments should provide meaningful insights into the code. Avoid filler comments that simply
+  describe the next step, as they create unnecessary clutter, same goes for docstrings.
+* Prefer comments to clarify surprising behavior and/or relationships between parts of the code
+  rather than explain what the next line of code does.
+* Catching exceptions, prefer using a specific exception type rather than a broad catch-all like
+  `Exception`.
 * Error messages should be prefixed with "Failed to ..."
-* 4 spaces for indentation rather than tabs
+* 4 spaces for indentation rather than tab
+* When using `# noqa` to suppress a style or linter warning, include a comment explaining the
+  justification for bypassing the check.
+* When using `# type: ignore` to suppress a mypy warning, include a comment explaining the
+  justification for bypassing the check.
+* Don't use unicode characters in the codebase. ASCII-only is preferred for compatibility or
+  readability reasons.
 
 ## Common Tasks
 
