@@ -3,3 +3,4 @@ llama-stack-client>=0.2.1
 pandas
 streamlit
 streamlit-option-menu
+tornado>=6.5 # not directly required, pinned by Snyk to avoid a vulnerability
