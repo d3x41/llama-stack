@@ -6,7 +6,7 @@
 
 import inspect
 import sys
-from typing import Any, Dict, Protocol
+from typing import Any, Protocol
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -19,8 +19,8 @@ from llama_stack.distribution.datatypes import (
     StackRunConfig,
 )
 from llama_stack.distribution.resolver import resolve_impls
-from llama_stack.distribution.routers.routers import InferenceRouter
-from llama_stack.distribution.routers.routing_tables import ModelsRoutingTable
+from llama_stack.distribution.routers.inference import InferenceRouter
+from llama_stack.distribution.routing_tables.models import ModelsRoutingTable
 from llama_stack.providers.datatypes import InlineProviderSpec, ProviderSpec
 
 
@@ -48,14 +48,14 @@ class SampleConfig(BaseModel):
     )
 
     @classmethod
-    def sample_run_config(cls, **kwargs: Any) -> Dict[str, Any]:
+    def sample_run_config(cls, **kwargs: Any) -> dict[str, Any]:
         return {
             "foo": "baz",
         }
 
 
 class SampleImpl:
-    def __init__(self, config: SampleConfig, deps: Dict[Api, Any], provider_spec: ProviderSpec = None):
+    def __init__(self, config: SampleConfig, deps: dict[Api, Any], provider_spec: ProviderSpec = None):
         self.__provider_id__ = "test_provider"
         self.__provider_spec__ = provider_spec
         self.__provider_config__ = config

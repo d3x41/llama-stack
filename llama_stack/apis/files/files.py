@@ -4,7 +4,7 @@
 # This source code is licensed under the terms described in the LICENSE file in
 # the root directory of this source tree.
 
-from typing import List, Optional, Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable
 
 from pydantic import BaseModel
 
@@ -42,7 +42,7 @@ class ListBucketResponse(BaseModel):
     :param data: List of FileResponse entries
     """
 
-    data: List[BucketResponse]
+    data: list[BucketResponse]
 
 
 @json_schema_type
@@ -74,7 +74,7 @@ class ListFileResponse(BaseModel):
     :param data: List of FileResponse entries
     """
 
-    data: List[FileResponse]
+    data: list[FileResponse]
 
 
 @runtime_checkable
@@ -91,10 +91,11 @@ class Files(Protocol):
         """
         Create a new upload session for a file identified by a bucket and key.
 
-        :param bucket: Bucket under which the file is stored (valid chars: a-zA-Z0-9_-)
-        :param key: Key under which the file is stored (valid chars: a-zA-Z0-9_-/.)
-        :param mime_type: MIME type of the file
-        :param size: File size in bytes
+        :param bucket: Bucket under which the file is stored (valid chars: a-zA-Z0-9_-).
+        :param key: Key under which the file is stored (valid chars: a-zA-Z0-9_-/.).
+        :param mime_type: MIME type of the file.
+        :param size: File size in bytes.
+        :returns: A FileUploadResponse.
         """
         ...
 
@@ -102,12 +103,13 @@ class Files(Protocol):
     async def upload_content_to_session(
         self,
         upload_id: str,
-    ) -> Optional[FileResponse]:
+    ) -> FileResponse | None:
         """
         Upload file content to an existing upload session.
         On the server, request body will have the raw bytes that are uploaded.
 
-        :param upload_id: ID of the upload session
+        :param upload_id: ID of the upload session.
+        :returns: A FileResponse or None if the upload is not complete.
         """
         ...
 
@@ -117,9 +119,10 @@ class Files(Protocol):
         upload_id: str,
     ) -> FileUploadResponse:
         """
-        Returns information about an existsing upload session
+        Returns information about an existsing upload session.
 
-        :param upload_id: ID of the upload session
+        :param upload_id: ID of the upload session.
+        :returns: A FileUploadResponse.
         """
         ...
 
@@ -130,6 +133,9 @@ class Files(Protocol):
     ) -> ListBucketResponse:
         """
         List all buckets.
+
+        :param bucket: Bucket name (valid chars: a-zA-Z0-9_-).
+        :returns: A ListBucketResponse.
         """
         ...
 
@@ -141,7 +147,8 @@ class Files(Protocol):
         """
         List all files in a bucket.
 
-        :param bucket: Bucket name (valid chars: a-zA-Z0-9_-)
+        :param bucket: Bucket name (valid chars: a-zA-Z0-9_-).
+        :returns: A ListFileResponse.
         """
         ...
 
@@ -154,8 +161,9 @@ class Files(Protocol):
         """
         Get a file info identified by a bucket and key.
 
-        :param bucket: Bucket name (valid chars: a-zA-Z0-9_-)
-        :param key: Key under which the file is stored (valid chars: a-zA-Z0-9_-/.)
+        :param bucket: Bucket name (valid chars: a-zA-Z0-9_-).
+        :param key: Key under which the file is stored (valid chars: a-zA-Z0-9_-/.).
+        :returns: A FileResponse.
         """
         ...
 
@@ -168,7 +176,7 @@ class Files(Protocol):
         """
         Delete a file identified by a bucket and key.
 
-        :param bucket: Bucket name (valid chars: a-zA-Z0-9_-)
-        :param key: Key under which the file is stored (valid chars: a-zA-Z0-9_-/.)
+        :param bucket: Bucket name (valid chars: a-zA-Z0-9_-).
+        :param key: Key under which the file is stored (valid chars: a-zA-Z0-9_-/.).
         """
         ...

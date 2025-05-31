@@ -6,6 +6,7 @@
 
 import hashlib
 import ipaddress
+import types
 import typing
 from dataclasses import make_dataclass
 from typing import Any, Dict, Set, Union
@@ -189,7 +190,7 @@ class ContentBuilder:
             else:
                 return "application/json"
 
-        if typing.get_origin(payload_type) is typing.Union:
+        if typing.get_origin(payload_type) in (typing.Union, types.UnionType):
             media_types = []
             item_types = []
             for x in typing.get_args(payload_type):
@@ -758,7 +759,7 @@ class Generator:
         )
 
         return Operation(
-            tags=[op.defining_class.__name__],
+            tags=[getattr(op.defining_class, "API_NAMESPACE", op.defining_class.__name__)],
             summary=None,
             # summary=doc_string.short_description,
             description=description,
@@ -804,6 +805,8 @@ class Generator:
         operation_tags: List[Tag] = []
         for cls in endpoint_classes:
             doc_string = parse_type(cls)
+            if hasattr(cls, "API_NAMESPACE") and cls.API_NAMESPACE != cls.__name__:
+                continue
             operation_tags.append(
                 Tag(
                     name=cls.__name__,

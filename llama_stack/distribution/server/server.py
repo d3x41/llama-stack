@@ -6,36 +6,42 @@
 
 import argparse
 import asyncio
+import functools
 import inspect
 import json
 import os
+import ssl
 import sys
 import traceback
 import warnings
+from collections.abc import Callable
 from contextlib import asynccontextmanager
 from importlib.metadata import version as parse_version
 from pathlib import Path
-from typing import Any, List, Optional, Union
+from typing import Annotated, Any
 
+import rich.pretty
 import yaml
+from aiohttp import hdrs
 from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi import Path as FastapiPath
 from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from openai import BadRequestError
 from pydantic import BaseModel, ValidationError
-from typing_extensions import Annotated
 
-from llama_stack.distribution.datatypes import LoggingConfig, StackRunConfig
+from llama_stack.distribution.datatypes import AuthenticationRequiredError, LoggingConfig, StackRunConfig
 from llama_stack.distribution.distribution import builtin_automatically_routed_apis
 from llama_stack.distribution.request_headers import (
     PROVIDER_DATA_VAR,
     request_provider_data_context,
 )
 from llama_stack.distribution.resolver import InvalidProviderError
-from llama_stack.distribution.server.endpoints import (
-    find_matching_endpoint,
-    initialize_endpoint_impls,
+from llama_stack.distribution.server.routes import (
+    find_matching_route,
+    get_all_api_routes,
+    initialize_route_impls,
 )
 from llama_stack.distribution.stack import (
     construct_stack,
@@ -58,7 +64,7 @@ from llama_stack.providers.utils.telemetry.tracing import (
 )
 
 from .auth import AuthenticationMiddleware
-from .endpoints import get_all_api_endpoints
+from .quota import QuotaMiddleware
 
 REPO_ROOT = Path(__file__).parent.parent.parent.parent
 
@@ -91,7 +97,7 @@ async def global_exception_handler(request: Request, exc: Exception):
     return JSONResponse(status_code=http_exc.status_code, content={"error": {"detail": http_exc.detail}})
 
 
-def translate_exception(exc: Exception) -> Union[HTTPException, RequestValidationError]:
+def translate_exception(exc: Exception) -> HTTPException | RequestValidationError:
     if isinstance(exc, ValidationError):
         exc = RequestValidationError(exc.errors())
 
@@ -115,10 +121,12 @@ def translate_exception(exc: Exception) -> Union[HTTPException, RequestValidatio
         return HTTPException(status_code=400, detail=str(exc))
     elif isinstance(exc, PermissionError):
         return HTTPException(status_code=403, detail=f"Permission denied: {str(exc)}")
-    elif isinstance(exc, TimeoutError):
+    elif isinstance(exc, asyncio.TimeoutError | TimeoutError):
         return HTTPException(status_code=504, detail=f"Operation timed out: {str(exc)}")
     elif isinstance(exc, NotImplementedError):
         return HTTPException(status_code=501, detail=f"Not implemented: {str(exc)}")
+    elif isinstance(exc, AuthenticationRequiredError):
+        return HTTPException(status_code=401, detail=f"Authentication required: {str(exc)}")
     else:
         return HTTPException(
             status_code=500,
@@ -140,7 +148,7 @@ async def shutdown(app):
                 await asyncio.wait_for(impl.shutdown(), timeout=5)
             else:
                 logger.warning("No shutdown method for %s", impl_name)
-        except asyncio.TimeoutError:
+        except (asyncio.TimeoutError, TimeoutError):
             logger.exception("Shutdown timeout for %s ", impl_name, exc_info=True)
         except (Exception, asyncio.CancelledError) as e:
             logger.exception("Failed to shutdown %s: %s", impl_name, {e})
@@ -187,10 +195,30 @@ async def sse_generator(event_gen_coroutine):
         )
 
 
-def create_dynamic_typed_route(func: Any, method: str, route: str):
-    async def endpoint(request: Request, **kwargs):
+async def log_request_pre_validation(request: Request):
+    if request.method in ("POST", "PUT", "PATCH"):
+        try:
+            body_bytes = await request.body()
+            if body_bytes:
+                try:
+                    parsed_body = json.loads(body_bytes.decode())
+                    log_output = rich.pretty.pretty_repr(parsed_body)
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    log_output = repr(body_bytes)
+                logger.debug(f"Incoming raw request body for {request.method} {request.url.path}:\n{log_output}")
+            else:
+                logger.debug(f"Incoming {request.method} {request.url.path} request with empty body.")
+        except Exception as e:
+            logger.warning(f"Could not read or log request body for {request.method} {request.url.path}: {e}")
+
+
+def create_dynamic_typed_route(func: Any, method: str, route: str) -> Callable:
+    @functools.wraps(func)
+    async def route_handler(request: Request, **kwargs):
         # Get auth attributes from the request scope
         user_attributes = request.scope.get("user_attributes", {})
+
+        await log_request_pre_validation(request)
 
         # Use context manager with both provider data and auth attributes
         with request_provider_data_context(request.headers, user_attributes):
@@ -226,9 +254,9 @@ def create_dynamic_typed_route(func: Any, method: str, route: str):
             for param in new_params[1:]
         ]
 
-    endpoint.__signature__ = sig.replace(parameters=new_params)
+    route_handler.__signature__ = sig.replace(parameters=new_params)
 
-    return endpoint
+    return route_handler
 
 
 class TracingMiddleware:
@@ -250,17 +278,28 @@ class TracingMiddleware:
             logger.debug(f"Bypassing custom routing for FastAPI built-in path: {path}")
             return await self.app(scope, receive, send)
 
-        if not hasattr(self, "endpoint_impls"):
-            self.endpoint_impls = initialize_endpoint_impls(self.impls)
+        if not hasattr(self, "route_impls"):
+            self.route_impls = initialize_route_impls(self.impls)
 
         try:
-            _, _, trace_path = find_matching_endpoint(scope.get("method", "GET"), path, self.endpoint_impls)
+            _, _, trace_path = find_matching_route(scope.get("method", hdrs.METH_GET), path, self.route_impls)
         except ValueError:
             # If no matching endpoint is found, pass through to FastAPI
-            logger.debug(f"No matching endpoint found for path: {path}, falling back to FastAPI")
+            logger.debug(f"No matching route found for path: {path}, falling back to FastAPI")
             return await self.app(scope, receive, send)
 
-        trace_context = await start_trace(trace_path, {"__location__": "server", "raw_path": path})
+        trace_attributes = {"__location__": "server", "raw_path": path}
+
+        # Extract W3C trace context headers and store as trace attributes
+        headers = dict(scope.get("headers", []))
+        traceparent = headers.get(b"traceparent", b"").decode()
+        if traceparent:
+            trace_attributes["traceparent"] = traceparent
+        tracestate = headers.get(b"tracestate", b"").decode()
+        if tracestate:
+            trace_attributes["tracestate"] = tracestate
+
+        trace_context = await start_trace(trace_path, trace_attributes)
 
         async def send_with_trace_id(message):
             if message["type"] == "http.response.start":
@@ -315,7 +354,7 @@ class ClientVersionMiddleware:
         return await self.app(scope, receive, send)
 
 
-def main(args: Optional[argparse.Namespace] = None):
+def main(args: argparse.Namespace | None = None):
     """Start the LlamaStack server."""
     parser = argparse.ArgumentParser(description="Start the LlamaStack server.")
     parser.add_argument(
@@ -338,21 +377,10 @@ def main(args: Optional[argparse.Namespace] = None):
         default=int(os.getenv("LLAMA_STACK_PORT", 8321)),
         help="Port to listen on",
     )
-    parser.add_argument("--disable-ipv6", action="store_true", help="Whether to disable IPv6 support")
     parser.add_argument(
         "--env",
         action="append",
         help="Environment variables in KEY=value format. Can be specified multiple times.",
-    )
-    parser.add_argument(
-        "--tls-keyfile",
-        help="Path to TLS key file for HTTPS",
-        required="--tls-certfile" in sys.argv,
-    )
-    parser.add_argument(
-        "--tls-certfile",
-        help="Path to TLS certificate file for HTTPS",
-        required="--tls-keyfile" in sys.argv,
     )
 
     # Determine whether the server args are being passed by the "run" command, if this is the case
@@ -360,14 +388,6 @@ def main(args: Optional[argparse.Namespace] = None):
     # parsed from the command line
     if args is None:
         args = parser.parse_args()
-
-    # Check for deprecated argument usage
-    if "--yaml-config" in sys.argv:
-        warnings.warn(
-            "The '--yaml-config' argument is deprecated and will be removed in a future version. Use '--config' instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
 
     log_line = ""
     if args.config:
@@ -382,10 +402,10 @@ def main(args: Optional[argparse.Namespace] = None):
             raise ValueError(f"Template {args.template} does not exist")
         log_line = f"Using template {args.template} config file: {config_file}"
     else:
-        raise ValueError("Either --yaml-config or --template must be provided")
+        raise ValueError("Either --config or --template must be provided")
 
     logger_config = None
-    with open(config_file, "r") as fp:
+    with open(config_file) as fp:
         config_contents = yaml.safe_load(fp)
         if isinstance(config_contents, dict) and (cfg := config_contents.get("logging_config")):
             logger_config = LoggingConfig(**cfg)
@@ -422,6 +442,46 @@ def main(args: Optional[argparse.Namespace] = None):
     if config.server.auth:
         logger.info(f"Enabling authentication with provider: {config.server.auth.provider_type.value}")
         app.add_middleware(AuthenticationMiddleware, auth_config=config.server.auth)
+    else:
+        if config.server.quota:
+            quota = config.server.quota
+            logger.warning(
+                "Configured authenticated_max_requests (%d) but no auth is enabled; "
+                "falling back to anonymous_max_requests (%d) for all the requests",
+                quota.authenticated_max_requests,
+                quota.anonymous_max_requests,
+            )
+
+    if config.server.quota:
+        logger.info("Enabling quota middleware for authenticated and anonymous clients")
+
+        quota = config.server.quota
+        anonymous_max_requests = quota.anonymous_max_requests
+        # if auth is disabled, use the anonymous max requests
+        authenticated_max_requests = quota.authenticated_max_requests if config.server.auth else anonymous_max_requests
+
+        kv_config = quota.kvstore
+        window_map = {"day": 86400}
+        window_seconds = window_map[quota.period.value]
+
+        app.add_middleware(
+            QuotaMiddleware,
+            kv_config=kv_config,
+            anonymous_max_requests=anonymous_max_requests,
+            authenticated_max_requests=authenticated_max_requests,
+            window_seconds=window_seconds,
+        )
+
+    # --- CORS middleware for local development ---
+    # TODO: move to reverse proxy
+    ui_port = os.environ.get("LLAMA_STACK_UI_PORT", 8322)
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=[f"http://localhost:{ui_port}"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
     try:
         impls = asyncio.run(construct_stack(config))
@@ -434,7 +494,7 @@ def main(args: Optional[argparse.Namespace] = None):
     else:
         setup_logger(TelemetryAdapter(TelemetryConfig(), {}))
 
-    all_endpoints = get_all_api_endpoints()
+    all_routes = get_all_api_routes()
 
     if config.apis:
         apis_to_serve = set(config.apis)
@@ -452,24 +512,29 @@ def main(args: Optional[argparse.Namespace] = None):
     for api_str in apis_to_serve:
         api = Api(api_str)
 
-        endpoints = all_endpoints[api]
+        routes = all_routes[api]
         impl = impls[api]
 
-        for endpoint in endpoints:
-            if not hasattr(impl, endpoint.name):
+        for route in routes:
+            if not hasattr(impl, route.name):
                 # ideally this should be a typing violation already
-                raise ValueError(f"Could not find method {endpoint.name} on {impl}!!")
+                raise ValueError(f"Could not find method {route.name} on {impl}!")
 
-            impl_method = getattr(impl, endpoint.name)
-            logger.debug(f"{endpoint.method.upper()} {endpoint.route}")
+            impl_method = getattr(impl, route.name)
+            # Filter out HEAD method since it's automatically handled by FastAPI for GET routes
+            available_methods = [m for m in route.methods if m != "HEAD"]
+            if not available_methods:
+                raise ValueError(f"No methods found for {route.name} on {impl}")
+            method = available_methods[0]
+            logger.debug(f"{method} {route.path}")
 
             with warnings.catch_warnings():
                 warnings.filterwarnings("ignore", category=UserWarning, module="pydantic._internal._fields")
-                getattr(app, endpoint.method)(endpoint.route, response_model=None)(
+                getattr(app, method.lower())(route.path, response_model=None)(
                     create_dynamic_typed_route(
                         impl_method,
-                        endpoint.method,
-                        endpoint.route,
+                        method.lower(),
+                        route.path,
                     )
                 )
 
@@ -487,21 +552,24 @@ def main(args: Optional[argparse.Namespace] = None):
     port = args.port or config.server.port
 
     ssl_config = None
-    if args.tls_keyfile:
-        keyfile = args.tls_keyfile
-        certfile = args.tls_certfile
-    else:
-        keyfile = config.server.tls_keyfile
-        certfile = config.server.tls_certfile
+    keyfile = config.server.tls_keyfile
+    certfile = config.server.tls_certfile
 
     if keyfile and certfile:
         ssl_config = {
             "ssl_keyfile": keyfile,
             "ssl_certfile": certfile,
         }
-        logger.info(f"HTTPS enabled with certificates:\n  Key: {keyfile}\n  Cert: {certfile}")
+        if config.server.tls_cafile:
+            ssl_config["ssl_ca_certs"] = config.server.tls_cafile
+            ssl_config["ssl_cert_reqs"] = ssl.CERT_REQUIRED
+            logger.info(
+                f"HTTPS enabled with certificates:\n  Key: {keyfile}\n  Cert: {certfile}\n  CA: {config.server.tls_cafile}"
+            )
+        else:
+            logger.info(f"HTTPS enabled with certificates:\n  Key: {keyfile}\n  Cert: {certfile}")
 
-    listen_host = ["::", "0.0.0.0"] if not args.disable_ipv6 else "0.0.0.0"
+    listen_host = config.server.host or ["::", "0.0.0.0"]
     logger.info(f"Listening on {listen_host}:{port}")
 
     uvicorn_config = {
@@ -517,7 +585,7 @@ def main(args: Optional[argparse.Namespace] = None):
     uvicorn.run(**uvicorn_config)
 
 
-def extract_path_params(route: str) -> List[str]:
+def extract_path_params(route: str) -> list[str]:
     segments = route.split("/")
     params = [seg[1:-1] for seg in segments if seg.startswith("{") and seg.endswith("}")]
     # to handle path params like {param:path}

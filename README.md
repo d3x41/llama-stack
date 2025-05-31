@@ -7,7 +7,7 @@
 [![Unit Tests](https://github.com/meta-llama/llama-stack/actions/workflows/unit-tests.yml/badge.svg?branch=main)](https://github.com/meta-llama/llama-stack/actions/workflows/unit-tests.yml?query=branch%3Amain)
 [![Integration Tests](https://github.com/meta-llama/llama-stack/actions/workflows/integration-tests.yml/badge.svg?branch=main)](https://github.com/meta-llama/llama-stack/actions/workflows/integration-tests.yml?query=branch%3Amain)
 
-[**Quick Start**](https://llama-stack.readthedocs.io/en/latest/getting_started/index.html) | [**Documentation**](https://llama-stack.readthedocs.io/en/latest/index.html) | [**Colab Notebook**](./docs/getting_started.ipynb)
+[**Quick Start**](https://llama-stack.readthedocs.io/en/latest/getting_started/index.html) | [**Documentation**](https://llama-stack.readthedocs.io/en/latest/index.html) | [**Colab Notebook**](./docs/getting_started.ipynb) | [**Discord**](https://discord.gg/llama-stack)
 
 ### ✨🎉 Llama 4 Support  🎉✨
 We released [Version 0.2.0](https://github.com/meta-llama/llama-stack/releases/tag/v0.2.0) with support for the Llama 4 herd of models released by Meta.
@@ -107,26 +107,29 @@ By reducing friction and complexity, Llama Stack empowers developers to focus on
 ### API Providers
 Here is a list of the various API providers and available distributions that can help developers get started easily with Llama Stack.
 
-| **API Provider Builder** |    **Environments**    | **Agents** | **Inference** | **Memory** | **Safety** | **Telemetry** |
-|:------------------------:|:----------------------:|:----------:|:-------------:|:----------:|:----------:|:-------------:|
-|      Meta Reference      |      Single Node       |     ✅      |       ✅       |     ✅      |     ✅      |       ✅       |
-|        SambaNova         |         Hosted         |            |       ✅       |            |            |               |
-|         Cerebras         |         Hosted         |            |       ✅       |            |            |               |
-|        Fireworks         |         Hosted         |     ✅      |       ✅       |     ✅      |            |               |
-|       AWS Bedrock        |         Hosted         |            |       ✅       |            |     ✅      |               |
-|         Together         |         Hosted         |     ✅      |       ✅       |            |     ✅      |               |
-|           Groq           |         Hosted         |            |       ✅       |            |            |               |
-|          Ollama          |      Single Node       |            |       ✅       |            |            |               |
-|           TGI            | Hosted and Single Node |            |       ✅       |            |            |               |
-|        NVIDIA NIM        | Hosted and Single Node |            |       ✅       |            |            |               |
-|          Chroma          |      Single Node       |            |               |     ✅      |            |               |
-|        PG Vector         |      Single Node       |            |               |     ✅      |            |               |
-|    PyTorch ExecuTorch    |     On-device iOS      |     ✅      |       ✅       |            |            |               |
-|           vLLM           | Hosted and Single Node |            |       ✅       |            |            |               |
-|          OpenAI          |         Hosted         |            |       ✅       |            |            |               |
-|        Anthropic         |         Hosted         |            |       ✅       |            |            |               |
-|          Gemini          |         Hosted         |            |       ✅       |            |            |               |
-|          watsonx         |         Hosted         |            |       ✅       |            |            |               |
+| **API Provider Builder** |    **Environments**    | **Agents** | **Inference** | **Memory** | **Safety** | **Telemetry** | **Post Training** |
+|:------------------------:|:----------------------:|:----------:|:-------------:|:----------:|:----------:|:-------------:|:-----------------:|
+|      Meta Reference      |      Single Node       |     ✅      |       ✅       |     ✅      |     ✅      |       ✅       |               |
+|        SambaNova         |         Hosted         |            |       ✅       |            |     ✅      |               |                  |
+|         Cerebras         |         Hosted         |            |       ✅       |            |            |               |                  |
+|        Fireworks         |         Hosted         |     ✅      |       ✅       |     ✅      |            |               |                |
+|       AWS Bedrock        |         Hosted         |            |       ✅       |            |     ✅      |               |                |
+|         Together         |         Hosted         |     ✅      |       ✅       |            |     ✅      |               |                |
+|           Groq           |         Hosted         |            |       ✅       |            |            |               |                 |
+|          Ollama          |      Single Node       |            |       ✅       |            |            |               |                 |
+|           TGI            | Hosted and Single Node |            |       ✅       |            |            |               |                 |
+|        NVIDIA NIM        | Hosted and Single Node |            |       ✅       |            |            |               |                 |
+|          Chroma          |      Single Node       |            |               |     ✅      |            |               |                 |
+|        PG Vector         |      Single Node       |            |               |     ✅      |            |               |                 |
+|    PyTorch ExecuTorch    |     On-device iOS      |     ✅      |       ✅       |            |            |               |                |
+|           vLLM           | Hosted and Single Node |            |       ✅       |            |            |               |                 |
+|          OpenAI          |         Hosted         |            |       ✅       |            |            |               |                 |
+|        Anthropic         |         Hosted         |            |       ✅       |            |            |               |                 |
+|          Gemini          |         Hosted         |            |       ✅       |            |            |               |                 |
+|          watsonx         |         Hosted         |            |       ✅       |            |            |               |                 |
+|        HuggingFace       |       Single Node      |            |                |            |            |               |       ✅        |
+|         TorchTune        |       Single Node      |            |                |            |            |               |       ✅        |
+|       NVIDIA NEMO        |         Hosted         |            |                |            |            |               |       ✅        |
 
 
 ### Distributions
