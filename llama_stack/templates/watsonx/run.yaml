@@ -18,6 +18,9 @@ providers:
       url: ${env.WATSONX_BASE_URL:https://us-south.ml.cloud.ibm.com}
       api_key: ${env.WATSONX_API_KEY:}
       project_id: ${env.WATSONX_PROJECT_ID:}
+  - provider_id: sentence-transformers
+    provider_type: inline::sentence-transformers
+    config: {}
   vector_io:
   - provider_id: faiss
     provider_type: inline::faiss
@@ -39,11 +42,14 @@ providers:
         type: sqlite
         namespace: null
         db_path: ${env.SQLITE_STORE_DIR:~/.llama/distributions/watsonx}/agents_store.db
+      responses_store:
+        type: sqlite
+        db_path: ${env.SQLITE_STORE_DIR:~/.llama/distributions/watsonx}/responses_store.db
   telemetry:
   - provider_id: meta-reference
     provider_type: inline::meta-reference
     config:
-      service_name: ${env.OTEL_SERVICE_NAME:}
+      service_name: "${env.OTEL_SERVICE_NAME:\u200B}"
       sinks: ${env.TELEMETRY_SINKS:console,sqlite}
       sqlite_db_path: ${env.SQLITE_STORE_DIR:~/.llama/distributions/watsonx}/trace_store.db
   eval:
@@ -91,9 +97,6 @@ providers:
     config:
       api_key: ${env.TAVILY_SEARCH_API_KEY:}
       max_results: 3
-  - provider_id: code-interpreter
-    provider_type: inline::code-interpreter
-    config: {}
   - provider_id: rag-runtime
     provider_type: inline::rag-runtime
     config: {}
@@ -103,6 +106,9 @@ providers:
 metadata_store:
   type: sqlite
   db_path: ${env.SQLITE_STORE_DIR:~/.llama/distributions/watsonx}/registry.db
+inference_store:
+  type: sqlite
+  db_path: ${env.SQLITE_STORE_DIR:~/.llama/distributions/watsonx}/inference_store.db
 models:
 - metadata: {}
   model_id: meta-llama/llama-3-3-70b-instruct
@@ -194,6 +200,11 @@ models:
   provider_id: watsonx
   provider_model_id: meta-llama/llama-guard-3-11b-vision
   model_type: llm
+- metadata:
+    embedding_dimension: 384
+  model_id: all-MiniLM-L6-v2
+  provider_id: sentence-transformers
+  model_type: embedding
 shields: []
 vector_dbs: []
 datasets: []
@@ -204,7 +215,5 @@ tool_groups:
   provider_id: tavily-search
 - toolgroup_id: builtin::rag
   provider_id: rag-runtime
-- toolgroup_id: builtin::code_interpreter
-  provider_id: code-interpreter
 server:
   port: 8321

@@ -56,10 +56,10 @@ shields: []
 server:
   port: 8321
   auth:
-    provider_type: "kubernetes"
+    provider_type: "oauth2_token"
     config:
-      api_server_url: "https://kubernetes.default.svc"
-      ca_cert_path: "/path/to/ca.crt"
+      jwks:
+        uri: "https://my-token-issuing-svc.com/jwks"
 ```
 
 Let's break this down into the different sections. The first section specifies the set of APIs that the stack server will serve:
@@ -118,11 +118,6 @@ server:
   port: 8321  # Port to listen on (default: 8321)
   tls_certfile: "/path/to/cert.pem"  # Optional: Path to TLS certificate for HTTPS
   tls_keyfile: "/path/to/key.pem"    # Optional: Path to TLS key for HTTPS
-  auth:                              # Optional: Authentication configuration
-    provider_type: "kubernetes"      # Type of auth provider
-    config:                          # Provider-specific configuration
-      api_server_url: "https://kubernetes.default.svc"
-      ca_cert_path: "/path/to/ca.crt" # Optional: Path to CA certificate
 ```
 
 ### Authentication Configuration
@@ -135,25 +130,85 @@ Authorization: Bearer <token>
 
 The server supports multiple authentication providers:
 
-#### Kubernetes Provider
+#### OAuth 2.0/OpenID Connect Provider with Kubernetes
 
-The Kubernetes cluster must be configured to use a service account for authentication.
+The server can be configured to use service account tokens for authorization, validating these against the Kubernetes API server, e.g.:
+```yaml
+server:
+  auth:
+    provider_type: "oauth2_token"
+    config:
+      jwks:
+        uri: "https://kubernetes.default.svc:8443/openid/v1/jwks"
+	token: "${env.TOKEN:}"
+        key_recheck_period: 3600
+      tls_cafile: "/path/to/ca.crt"
+      issuer: "https://kubernetes.default.svc"
+      audience: "https://kubernetes.default.svc"
+```
+
+To find your cluster's jwks uri (from which the public key(s) to verify the token signature are obtained), run:
+```
+kubectl get --raw /.well-known/openid-configuration| jq -r .jwks_uri
+```
+
+For the tls_cafile, you can use the CA certificate of the OIDC provider:
+```bash
+kubectl config view --minify -o jsonpath='{.clusters[0].cluster.certificate-authority}'
+```
+
+For the issuer, you can use the OIDC provider's URL:
+```bash
+kubectl get --raw /.well-known/openid-configuration| jq .issuer
+```
+
+The audience can be obtained from a token, e.g. run:
+```bash
+kubectl create token default --duration=1h | cut -d. -f2 | base64 -d | jq .aud
+```
+
+The jwks token is used to authorize access to the jwks endpoint. You can obtain a token by running:
 
 ```bash
 kubectl create namespace llama-stack
 kubectl create serviceaccount llama-stack-auth -n llama-stack
-kubectl create rolebinding llama-stack-auth-rolebinding --clusterrole=admin --serviceaccount=llama-stack:llama-stack-auth -n llama-stack
 kubectl create token llama-stack-auth -n llama-stack > llama-stack-auth-token
+export TOKEN=$(cat llama-stack-auth-token)
 ```
 
-Validates tokens against the Kubernetes API server:
+Alternatively, you can configure the jwks endpoint to allow anonymous access. To do this, make sure
+the `kube-apiserver` runs with `--anonymous-auth=true` to allow unauthenticated requests
+and that the correct RoleBinding is created to allow the service account to access the necessary
+resources. If that is not the case, you can create a RoleBinding for the service account to access
+the necessary resources:
+
 ```yaml
-server:
-  auth:
-    provider_type: "kubernetes"
-    config:
-      api_server_url: "https://kubernetes.default.svc"  # URL of the Kubernetes API server
-      ca_cert_path: "/path/to/ca.crt"                   # Optional: Path to CA certificate
+# allow-anonymous-openid.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: allow-anonymous-openid
+rules:
+- nonResourceURLs: ["/openid/v1/jwks"]
+  verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: allow-anonymous-openid
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: allow-anonymous-openid
+subjects:
+- kind: User
+  name: system:anonymous
+  apiGroup: rbac.authorization.k8s.io
+```
+
+And then apply the configuration:
+```bash
+kubectl apply -f allow-anonymous-openid.yaml
 ```
 
 The provider extracts user information from the JWT token:
@@ -207,6 +262,80 @@ And must respond with:
 ```
 
 If no access attributes are returned, the token is used as a namespace.
+
+### Quota Configuration
+
+The `quota` section allows you to enable server-side request throttling for both
+authenticated and anonymous clients. This is useful for preventing abuse, enforcing
+fairness across tenants, and controlling infrastructure costs without requiring
+client-side rate limiting or external proxies.
+
+Quotas are disabled by default. When enabled, each client is tracked using either:
+
+* Their authenticated `client_id` (derived from the Bearer token), or
+* Their IP address (fallback for anonymous requests)
+
+Quota state is stored in a SQLite-backed key-value store, and rate limits are applied
+within a configurable time window (currently only `day` is supported).
+
+#### Example
+
+```yaml
+server:
+  quota:
+    kvstore:
+      type: sqlite
+      db_path: ./quotas.db
+    anonymous_max_requests: 100
+    authenticated_max_requests: 1000
+    period: day
+```
+
+#### Configuration Options
+
+| Field                        | Description                                                                |
+| ---------------------------- | -------------------------------------------------------------------------- |
+| `kvstore`                    | Required. Backend storage config for tracking request counts.              |
+| `kvstore.type`               | Must be `"sqlite"` for now. Other backends may be supported in the future. |
+| `kvstore.db_path`            | File path to the SQLite database.                                          |
+| `anonymous_max_requests`     | Max requests per period for unauthenticated clients.                       |
+| `authenticated_max_requests` | Max requests per period for authenticated clients.                         |
+| `period`                     | Time window for quota enforcement. Only `"day"` is supported.              |
+
+> Note: if `authenticated_max_requests` is set but no authentication provider is
+configured, the server will fall back to applying `anonymous_max_requests` to all
+clients.
+
+#### Example with Authentication Enabled
+
+```yaml
+server:
+  port: 8321
+  auth:
+    provider_type: custom
+    config:
+      endpoint: https://auth.example.com/validate
+  quota:
+    kvstore:
+      type: sqlite
+      db_path: ./quotas.db
+    anonymous_max_requests: 100
+    authenticated_max_requests: 1000
+    period: day
+```
+
+If a client exceeds their limit, the server responds with:
+
+```http
+HTTP/1.1 429 Too Many Requests
+Content-Type: application/json
+
+{
+  "error": {
+    "message": "Quota exceeded"
+  }
+}
+```
 
 ## Extending to handle Safety
 

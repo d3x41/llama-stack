@@ -9,19 +9,25 @@ import base64
 import io
 import json
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import faiss
 import numpy as np
 from numpy.typing import NDArray
 
-from llama_stack.apis.common.content_types import InterleavedContent
+from llama_stack.apis.files import Files
+from llama_stack.apis.inference import InterleavedContent
 from llama_stack.apis.inference.inference import Inference
 from llama_stack.apis.vector_dbs import VectorDB
-from llama_stack.apis.vector_io import Chunk, QueryChunksResponse, VectorIO
+from llama_stack.apis.vector_io import (
+    Chunk,
+    QueryChunksResponse,
+    VectorIO,
+)
 from llama_stack.providers.datatypes import VectorDBsProtocolPrivate
 from llama_stack.providers.utils.kvstore import kvstore_impl
 from llama_stack.providers.utils.kvstore.api import KVStore
+from llama_stack.providers.utils.memory.openai_vector_store_mixin import OpenAIVectorStoreMixin
 from llama_stack.providers.utils.memory.vector_store import (
     EmbeddingIndex,
     VectorDBWithIndex,
@@ -34,6 +40,7 @@ logger = logging.getLogger(__name__)
 VERSION = "v3"
 VECTOR_DBS_PREFIX = f"vector_dbs:{VERSION}::"
 FAISS_INDEX_PREFIX = f"faiss_index:{VERSION}::"
+OPENAI_VECTOR_STORES_PREFIX = f"openai_vector_stores:{VERSION}::"
 
 
 class FaissIndex(EmbeddingIndex):
@@ -84,7 +91,7 @@ class FaissIndex(EmbeddingIndex):
 
         await self.kvstore.delete(f"{FAISS_INDEX_PREFIX}{self.bank_id}")
 
-    async def add_chunks(self, chunks: List[Chunk], embeddings: NDArray):
+    async def add_chunks(self, chunks: list[Chunk], embeddings: NDArray):
         # Add dimension check
         embedding_dim = embeddings.shape[1] if len(embeddings.shape) > 1 else embeddings.shape[0]
         if embedding_dim != self.index.d:
@@ -99,33 +106,58 @@ class FaissIndex(EmbeddingIndex):
         # Save updated index
         await self._save_index()
 
-    async def query(self, embedding: NDArray, k: int, score_threshold: float) -> QueryChunksResponse:
+    async def query_vector(
+        self,
+        embedding: NDArray,
+        k: int,
+        score_threshold: float,
+    ) -> QueryChunksResponse:
         distances, indices = await asyncio.to_thread(self.index.search, embedding.reshape(1, -1).astype(np.float32), k)
-
         chunks = []
         scores = []
         for d, i in zip(distances[0], indices[0], strict=False):
             if i < 0:
                 continue
             chunks.append(self.chunk_by_index[int(i)])
-            scores.append(1.0 / float(d))
+            scores.append(1.0 / float(d) if d != 0 else float("inf"))
 
         return QueryChunksResponse(chunks=chunks, scores=scores)
 
+    async def query_keyword(
+        self,
+        query_string: str,
+        k: int,
+        score_threshold: float,
+    ) -> QueryChunksResponse:
+        raise NotImplementedError("Keyword search is not supported in FAISS")
 
-class FaissVectorIOAdapter(VectorIO, VectorDBsProtocolPrivate):
-    def __init__(self, config: FaissVectorIOConfig, inference_api: Inference) -> None:
+    async def query_hybrid(
+        self,
+        embedding: NDArray,
+        query_string: str,
+        k: int,
+        score_threshold: float,
+        reranker_type: str,
+        reranker_params: dict[str, Any] | None = None,
+    ) -> QueryChunksResponse:
+        raise NotImplementedError("Hybrid search is not supported in FAISS")
+
+
+class FaissVectorIOAdapter(OpenAIVectorStoreMixin, VectorIO, VectorDBsProtocolPrivate):
+    def __init__(self, config: FaissVectorIOConfig, inference_api: Inference, files_api: Files | None) -> None:
         self.config = config
         self.inference_api = inference_api
+        self.files_api = files_api
         self.cache: dict[str, VectorDBWithIndex] = {}
         self.kvstore: KVStore | None = None
+        self.openai_vector_stores: dict[str, dict[str, Any]] = {}
 
     async def initialize(self) -> None:
         self.kvstore = await kvstore_impl(self.config.kvstore)
         # Load existing banks from kvstore
         start_key = VECTOR_DBS_PREFIX
         end_key = f"{VECTOR_DBS_PREFIX}\xff"
-        stored_vector_dbs = await self.kvstore.range(start_key, end_key)
+        stored_vector_dbs = await self.kvstore.values_in_range(start_key, end_key)
 
         for vector_db_data in stored_vector_dbs:
             vector_db = VectorDB.model_validate_json(vector_db_data)
@@ -135,6 +167,9 @@ class FaissVectorIOAdapter(VectorIO, VectorDBsProtocolPrivate):
                 self.inference_api,
             )
             self.cache[vector_db.identifier] = index
+
+        # Load existing OpenAI vector stores using the mixin method
+        self.openai_vector_stores = await self._load_openai_vector_stores()
 
     async def shutdown(self) -> None:
         # Cleanup if needed
@@ -159,7 +194,7 @@ class FaissVectorIOAdapter(VectorIO, VectorDBsProtocolPrivate):
             inference_api=self.inference_api,
         )
 
-    async def list_vector_dbs(self) -> List[VectorDB]:
+    async def list_vector_dbs(self) -> list[VectorDB]:
         return [i.vector_db for i in self.cache.values()]
 
     async def unregister_vector_db(self, vector_db_id: str) -> None:
@@ -176,8 +211,8 @@ class FaissVectorIOAdapter(VectorIO, VectorDBsProtocolPrivate):
     async def insert_chunks(
         self,
         vector_db_id: str,
-        chunks: List[Chunk],
-        ttl_seconds: Optional[int] = None,
+        chunks: list[Chunk],
+        ttl_seconds: int | None = None,
     ) -> None:
         index = self.cache.get(vector_db_id)
         if index is None:
@@ -189,10 +224,42 @@ class FaissVectorIOAdapter(VectorIO, VectorDBsProtocolPrivate):
         self,
         vector_db_id: str,
         query: InterleavedContent,
-        params: Optional[Dict[str, Any]] = None,
+        params: dict[str, Any] | None = None,
     ) -> QueryChunksResponse:
         index = self.cache.get(vector_db_id)
         if index is None:
             raise ValueError(f"Vector DB {vector_db_id} not found")
 
         return await index.query_chunks(query, params)
+
+    # OpenAI Vector Store Mixin abstract method implementations
+    async def _save_openai_vector_store(self, store_id: str, store_info: dict[str, Any]) -> None:
+        """Save vector store metadata to kvstore."""
+        assert self.kvstore is not None
+        key = f"{OPENAI_VECTOR_STORES_PREFIX}{store_id}"
+        await self.kvstore.set(key=key, value=json.dumps(store_info))
+
+    async def _load_openai_vector_stores(self) -> dict[str, dict[str, Any]]:
+        """Load all vector store metadata from kvstore."""
+        assert self.kvstore is not None
+        start_key = OPENAI_VECTOR_STORES_PREFIX
+        end_key = f"{OPENAI_VECTOR_STORES_PREFIX}\xff"
+        stored_openai_stores = await self.kvstore.values_in_range(start_key, end_key)
+
+        stores = {}
+        for store_data in stored_openai_stores:
+            store_info = json.loads(store_data)
+            stores[store_info["id"]] = store_info
+        return stores
+
+    async def _update_openai_vector_store(self, store_id: str, store_info: dict[str, Any]) -> None:
+        """Update vector store metadata in kvstore."""
+        assert self.kvstore is not None
+        key = f"{OPENAI_VECTOR_STORES_PREFIX}{store_id}"
+        await self.kvstore.set(key=key, value=json.dumps(store_info))
+
+    async def _delete_openai_vector_store_from_storage(self, store_id: str) -> None:
+        """Delete vector store metadata from kvstore."""
+        assert self.kvstore is not None
+        key = f"{OPENAI_VECTOR_STORES_PREFIX}{store_id}"
+        await self.kvstore.delete(key)

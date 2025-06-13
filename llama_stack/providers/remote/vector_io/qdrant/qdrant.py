@@ -6,7 +6,7 @@
 
 import logging
 import uuid
-from typing import Any, Dict, List, Optional, Union
+from typing import Any
 
 from numpy.typing import NDArray
 from qdrant_client import AsyncQdrantClient, models
@@ -14,7 +14,16 @@ from qdrant_client.models import PointStruct
 
 from llama_stack.apis.inference import InterleavedContent
 from llama_stack.apis.vector_dbs import VectorDB
-from llama_stack.apis.vector_io import Chunk, QueryChunksResponse, VectorIO
+from llama_stack.apis.vector_io import (
+    Chunk,
+    QueryChunksResponse,
+    VectorIO,
+    VectorStoreDeleteResponse,
+    VectorStoreListResponse,
+    VectorStoreObject,
+    VectorStoreSearchResponsePage,
+)
+from llama_stack.apis.vector_io.vector_io import VectorStoreChunkingStrategy, VectorStoreFileObject
 from llama_stack.providers.datatypes import Api, VectorDBsProtocolPrivate
 from llama_stack.providers.inline.vector_io.qdrant import QdrantVectorIOConfig as InlineQdrantVectorIOConfig
 from llama_stack.providers.utils.memory.vector_store import (
@@ -44,7 +53,7 @@ class QdrantIndex(EmbeddingIndex):
         self.client = client
         self.collection_name = collection_name
 
-    async def add_chunks(self, chunks: List[Chunk], embeddings: NDArray):
+    async def add_chunks(self, chunks: list[Chunk], embeddings: NDArray):
         assert len(chunks) == len(embeddings), (
             f"Chunk length {len(chunks)} does not match embedding length {len(embeddings)}"
         )
@@ -68,7 +77,7 @@ class QdrantIndex(EmbeddingIndex):
 
         await self.client.upsert(collection_name=self.collection_name, points=points)
 
-    async def query(self, embedding: NDArray, k: int, score_threshold: float) -> QueryChunksResponse:
+    async def query_vector(self, embedding: NDArray, k: int, score_threshold: float) -> QueryChunksResponse:
         results = (
             await self.client.query_points(
                 collection_name=self.collection_name,
@@ -95,13 +104,32 @@ class QdrantIndex(EmbeddingIndex):
 
         return QueryChunksResponse(chunks=chunks, scores=scores)
 
+    async def query_keyword(
+        self,
+        query_string: str,
+        k: int,
+        score_threshold: float,
+    ) -> QueryChunksResponse:
+        raise NotImplementedError("Keyword search is not supported in Qdrant")
+
+    async def query_hybrid(
+        self,
+        embedding: NDArray,
+        query_string: str,
+        k: int,
+        score_threshold: float,
+        reranker_type: str,
+        reranker_params: dict[str, Any] | None = None,
+    ) -> QueryChunksResponse:
+        raise NotImplementedError("Hybrid search is not supported in Qdrant")
+
     async def delete(self):
         await self.client.delete_collection(collection_name=self.collection_name)
 
 
 class QdrantVectorIOAdapter(VectorIO, VectorDBsProtocolPrivate):
     def __init__(
-        self, config: Union[RemoteQdrantVectorIOConfig, InlineQdrantVectorIOConfig], inference_api: Api.inference
+        self, config: RemoteQdrantVectorIOConfig | InlineQdrantVectorIOConfig, inference_api: Api.inference
     ) -> None:
         self.config = config
         self.client: AsyncQdrantClient = None
@@ -131,7 +159,7 @@ class QdrantVectorIOAdapter(VectorIO, VectorDBsProtocolPrivate):
             await self.cache[vector_db_id].index.delete()
             del self.cache[vector_db_id]
 
-    async def _get_and_cache_vector_db_index(self, vector_db_id: str) -> Optional[VectorDBWithIndex]:
+    async def _get_and_cache_vector_db_index(self, vector_db_id: str) -> VectorDBWithIndex | None:
         if vector_db_id in self.cache:
             return self.cache[vector_db_id]
 
@@ -150,8 +178,8 @@ class QdrantVectorIOAdapter(VectorIO, VectorDBsProtocolPrivate):
     async def insert_chunks(
         self,
         vector_db_id: str,
-        chunks: List[Chunk],
-        ttl_seconds: Optional[int] = None,
+        chunks: list[Chunk],
+        ttl_seconds: int | None = None,
     ) -> None:
         index = await self._get_and_cache_vector_db_index(vector_db_id)
         if not index:
@@ -163,10 +191,74 @@ class QdrantVectorIOAdapter(VectorIO, VectorDBsProtocolPrivate):
         self,
         vector_db_id: str,
         query: InterleavedContent,
-        params: Optional[Dict[str, Any]] = None,
+        params: dict[str, Any] | None = None,
     ) -> QueryChunksResponse:
         index = await self._get_and_cache_vector_db_index(vector_db_id)
         if not index:
             raise ValueError(f"Vector DB {vector_db_id} not found")
 
         return await index.query_chunks(query, params)
+
+    async def openai_create_vector_store(
+        self,
+        name: str,
+        file_ids: list[str] | None = None,
+        expires_after: dict[str, Any] | None = None,
+        chunking_strategy: dict[str, Any] | None = None,
+        metadata: dict[str, Any] | None = None,
+        embedding_model: str | None = None,
+        embedding_dimension: int | None = 384,
+        provider_id: str | None = None,
+        provider_vector_db_id: str | None = None,
+    ) -> VectorStoreObject:
+        raise NotImplementedError("OpenAI Vector Stores API is not supported in Qdrant")
+
+    async def openai_list_vector_stores(
+        self,
+        limit: int | None = 20,
+        order: str | None = "desc",
+        after: str | None = None,
+        before: str | None = None,
+    ) -> VectorStoreListResponse:
+        raise NotImplementedError("OpenAI Vector Stores API is not supported in Qdrant")
+
+    async def openai_retrieve_vector_store(
+        self,
+        vector_store_id: str,
+    ) -> VectorStoreObject:
+        raise NotImplementedError("OpenAI Vector Stores API is not supported in Qdrant")
+
+    async def openai_update_vector_store(
+        self,
+        vector_store_id: str,
+        name: str | None = None,
+        expires_after: dict[str, Any] | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> VectorStoreObject:
+        raise NotImplementedError("OpenAI Vector Stores API is not supported in Qdrant")
+
+    async def openai_delete_vector_store(
+        self,
+        vector_store_id: str,
+    ) -> VectorStoreDeleteResponse:
+        raise NotImplementedError("OpenAI Vector Stores API is not supported in Qdrant")
+
+    async def openai_search_vector_store(
+        self,
+        vector_store_id: str,
+        query: str | list[str],
+        filters: dict[str, Any] | None = None,
+        max_num_results: int | None = 10,
+        ranking_options: dict[str, Any] | None = None,
+        rewrite_query: bool | None = False,
+    ) -> VectorStoreSearchResponsePage:
+        raise NotImplementedError("OpenAI Vector Stores API is not supported in Qdrant")
+
+    async def openai_attach_file_to_vector_store(
+        self,
+        vector_store_id: str,
+        file_id: str,
+        attributes: dict[str, Any] | None = None,
+        chunking_strategy: VectorStoreChunkingStrategy | None = None,
+    ) -> VectorStoreFileObject:
+        raise NotImplementedError("OpenAI Vector Stores API is not supported in Qdrant")
