@@ -32,7 +32,7 @@ providers:
     provider_type: remote::nvidia
     config:
       guardrails_service_url: ${env.GUARDRAILS_SERVICE_URL:http://localhost:7331}
-      config_id: self-check
+      config_id: ${env.NVIDIA_GUARDRAILS_CONFIG_ID:self-check}
   agents:
   - provider_id: meta-reference
     provider_type: inline::meta-reference
@@ -41,11 +41,14 @@ providers:
         type: sqlite
         namespace: null
         db_path: ${env.SQLITE_STORE_DIR:~/.llama/distributions/nvidia}/agents_store.db
+      responses_store:
+        type: sqlite
+        db_path: ${env.SQLITE_STORE_DIR:~/.llama/distributions/nvidia}/responses_store.db
   telemetry:
   - provider_id: meta-reference
     provider_type: inline::meta-reference
     config:
-      service_name: ${env.OTEL_SERVICE_NAME:}
+      service_name: "${env.OTEL_SERVICE_NAME:\u200B}"
       sinks: ${env.TELEMETRY_SINKS:console,sqlite}
       sqlite_db_path: ${env.SQLITE_STORE_DIR:~/.llama/distributions/nvidia}/trace_store.db
   eval:
@@ -80,6 +83,9 @@ providers:
 metadata_store:
   type: sqlite
   db_path: ${env.SQLITE_STORE_DIR:~/.llama/distributions/nvidia}/registry.db
+inference_store:
+  type: sqlite
+  db_path: ${env.SQLITE_STORE_DIR:~/.llama/distributions/nvidia}/inference_store.db
 models:
 - metadata: {}
   model_id: meta/llama3-8b-instruct

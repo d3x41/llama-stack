@@ -4,7 +4,8 @@
 # This source code is licensed under the terms described in the LICENSE file in
 # the root directory of this source tree.
 
-from typing import Any, AsyncGenerator, AsyncIterator, Dict, List, Optional, Union
+from collections.abc import AsyncGenerator, AsyncIterator
+from typing import Any
 
 import litellm
 
@@ -18,7 +19,7 @@ from llama_stack.apis.inference import (
     ChatCompletionResponseStreamChunk,
     EmbeddingsResponse,
     EmbeddingTaskType,
-    Inference,
+    InferenceProvider,
     JsonSchemaResponseFormat,
     LogProbConfig,
     Message,
@@ -34,6 +35,8 @@ from llama_stack.apis.inference.inference import (
     OpenAIChatCompletion,
     OpenAIChatCompletionChunk,
     OpenAICompletion,
+    OpenAIEmbeddingsResponse,
+    OpenAIEmbeddingUsage,
     OpenAIMessageParam,
     OpenAIResponseFormatParam,
 )
@@ -42,6 +45,7 @@ from llama_stack.distribution.request_headers import NeedsRequestProviderData
 from llama_stack.log import get_logger
 from llama_stack.providers.utils.inference.model_registry import ModelRegistryHelper
 from llama_stack.providers.utils.inference.openai_compat import (
+    b64_encode_openai_embeddings_response,
     convert_message_to_openai_dict_new,
     convert_openai_chat_completion_choice,
     convert_openai_chat_completion_stream,
@@ -58,13 +62,16 @@ logger = get_logger(name=__name__, category="inference")
 
 class LiteLLMOpenAIMixin(
     ModelRegistryHelper,
-    Inference,
+    InferenceProvider,
     NeedsRequestProviderData,
 ):
+    # TODO: avoid exposing the litellm specific model names to the user.
+    #       potential change: add a prefix param that gets added to the model name
+    #                         when calling litellm.
     def __init__(
         self,
         model_entries,
-        api_key_from_config: Optional[str],
+        api_key_from_config: str | None,
         provider_data_api_key_field: str,
         openai_compat_api_base: str | None = None,
     ):
@@ -91,32 +98,34 @@ class LiteLLMOpenAIMixin(
         return model
 
     def get_litellm_model_name(self, model_id: str) -> str:
-        return "openai/" + model_id if self.is_openai_compat else model_id
+        # users may be using openai/ prefix in their model names. the openai/models.py did this by default.
+        # model_id.startswith("openai/") is for backwards compatibility.
+        return "openai/" + model_id if self.is_openai_compat and not model_id.startswith("openai/") else model_id
 
     async def completion(
         self,
         model_id: str,
         content: InterleavedContent,
-        sampling_params: Optional[SamplingParams] = None,
-        response_format: Optional[ResponseFormat] = None,
-        stream: Optional[bool] = False,
-        logprobs: Optional[LogProbConfig] = None,
+        sampling_params: SamplingParams | None = None,
+        response_format: ResponseFormat | None = None,
+        stream: bool | None = False,
+        logprobs: LogProbConfig | None = None,
     ) -> AsyncGenerator:
         raise NotImplementedError("LiteLLM does not support completion requests")
 
     async def chat_completion(
         self,
         model_id: str,
-        messages: List[Message],
-        sampling_params: Optional[SamplingParams] = None,
-        tools: Optional[List[ToolDefinition]] = None,
-        tool_choice: Optional[ToolChoice] = ToolChoice.auto,
-        tool_prompt_format: Optional[ToolPromptFormat] = None,
-        response_format: Optional[ResponseFormat] = None,
-        stream: Optional[bool] = False,
-        logprobs: Optional[LogProbConfig] = None,
-        tool_config: Optional[ToolConfig] = None,
-    ) -> Union[ChatCompletionResponse, AsyncIterator[ChatCompletionResponseStreamChunk]]:
+        messages: list[Message],
+        sampling_params: SamplingParams | None = None,
+        tools: list[ToolDefinition] | None = None,
+        tool_choice: ToolChoice | None = ToolChoice.auto,
+        tool_prompt_format: ToolPromptFormat | None = None,
+        response_format: ResponseFormat | None = None,
+        stream: bool | None = False,
+        logprobs: LogProbConfig | None = None,
+        tool_config: ToolConfig | None = None,
+    ) -> ChatCompletionResponse | AsyncIterator[ChatCompletionResponseStreamChunk]:
         if sampling_params is None:
             sampling_params = SamplingParams()
 
@@ -243,10 +252,10 @@ class LiteLLMOpenAIMixin(
     async def embeddings(
         self,
         model_id: str,
-        contents: List[str] | List[InterleavedContentItem],
-        text_truncation: Optional[TextTruncation] = TextTruncation.none,
-        output_dimension: Optional[int] = None,
-        task_type: Optional[EmbeddingTaskType] = None,
+        contents: list[str] | list[InterleavedContentItem],
+        text_truncation: TextTruncation | None = TextTruncation.none,
+        output_dimension: int | None = None,
+        task_type: EmbeddingTaskType | None = None,
     ) -> EmbeddingsResponse:
         model = await self.model_store.get_model(model_id)
 
@@ -258,27 +267,65 @@ class LiteLLMOpenAIMixin(
         embeddings = [data["embedding"] for data in response["data"]]
         return EmbeddingsResponse(embeddings=embeddings)
 
+    async def openai_embeddings(
+        self,
+        model: str,
+        input: str | list[str],
+        encoding_format: str | None = "float",
+        dimensions: int | None = None,
+        user: str | None = None,
+    ) -> OpenAIEmbeddingsResponse:
+        model_obj = await self.model_store.get_model(model)
+
+        # Convert input to list if it's a string
+        input_list = [input] if isinstance(input, str) else input
+
+        # Call litellm embedding function
+        # litellm.drop_params = True
+        response = litellm.embedding(
+            model=self.get_litellm_model_name(model_obj.provider_resource_id),
+            input=input_list,
+            api_key=self.get_api_key(),
+            api_base=self.api_base,
+            dimensions=dimensions,
+        )
+
+        # Convert response to OpenAI format
+        data = b64_encode_openai_embeddings_response(response.data, encoding_format)
+
+        usage = OpenAIEmbeddingUsage(
+            prompt_tokens=response["usage"]["prompt_tokens"],
+            total_tokens=response["usage"]["total_tokens"],
+        )
+
+        return OpenAIEmbeddingsResponse(
+            data=data,
+            model=model_obj.provider_resource_id,
+            usage=usage,
+        )
+
     async def openai_completion(
         self,
         model: str,
-        prompt: Union[str, List[str], List[int], List[List[int]]],
-        best_of: Optional[int] = None,
-        echo: Optional[bool] = None,
-        frequency_penalty: Optional[float] = None,
-        logit_bias: Optional[Dict[str, float]] = None,
-        logprobs: Optional[bool] = None,
-        max_tokens: Optional[int] = None,
-        n: Optional[int] = None,
-        presence_penalty: Optional[float] = None,
-        seed: Optional[int] = None,
-        stop: Optional[Union[str, List[str]]] = None,
-        stream: Optional[bool] = None,
-        stream_options: Optional[Dict[str, Any]] = None,
-        temperature: Optional[float] = None,
-        top_p: Optional[float] = None,
-        user: Optional[str] = None,
-        guided_choice: Optional[List[str]] = None,
-        prompt_logprobs: Optional[int] = None,
+        prompt: str | list[str] | list[int] | list[list[int]],
+        best_of: int | None = None,
+        echo: bool | None = None,
+        frequency_penalty: float | None = None,
+        logit_bias: dict[str, float] | None = None,
+        logprobs: bool | None = None,
+        max_tokens: int | None = None,
+        n: int | None = None,
+        presence_penalty: float | None = None,
+        seed: int | None = None,
+        stop: str | list[str] | None = None,
+        stream: bool | None = None,
+        stream_options: dict[str, Any] | None = None,
+        temperature: float | None = None,
+        top_p: float | None = None,
+        user: str | None = None,
+        guided_choice: list[str] | None = None,
+        prompt_logprobs: int | None = None,
+        suffix: str | None = None,
     ) -> OpenAICompletion:
         model_obj = await self.model_store.get_model(model)
         params = await prepare_openai_completion_params(
@@ -309,29 +356,29 @@ class LiteLLMOpenAIMixin(
     async def openai_chat_completion(
         self,
         model: str,
-        messages: List[OpenAIMessageParam],
-        frequency_penalty: Optional[float] = None,
-        function_call: Optional[Union[str, Dict[str, Any]]] = None,
-        functions: Optional[List[Dict[str, Any]]] = None,
-        logit_bias: Optional[Dict[str, float]] = None,
-        logprobs: Optional[bool] = None,
-        max_completion_tokens: Optional[int] = None,
-        max_tokens: Optional[int] = None,
-        n: Optional[int] = None,
-        parallel_tool_calls: Optional[bool] = None,
-        presence_penalty: Optional[float] = None,
-        response_format: Optional[OpenAIResponseFormatParam] = None,
-        seed: Optional[int] = None,
-        stop: Optional[Union[str, List[str]]] = None,
-        stream: Optional[bool] = None,
-        stream_options: Optional[Dict[str, Any]] = None,
-        temperature: Optional[float] = None,
-        tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
-        tools: Optional[List[Dict[str, Any]]] = None,
-        top_logprobs: Optional[int] = None,
-        top_p: Optional[float] = None,
-        user: Optional[str] = None,
-    ) -> Union[OpenAIChatCompletion, AsyncIterator[OpenAIChatCompletionChunk]]:
+        messages: list[OpenAIMessageParam],
+        frequency_penalty: float | None = None,
+        function_call: str | dict[str, Any] | None = None,
+        functions: list[dict[str, Any]] | None = None,
+        logit_bias: dict[str, float] | None = None,
+        logprobs: bool | None = None,
+        max_completion_tokens: int | None = None,
+        max_tokens: int | None = None,
+        n: int | None = None,
+        parallel_tool_calls: bool | None = None,
+        presence_penalty: float | None = None,
+        response_format: OpenAIResponseFormatParam | None = None,
+        seed: int | None = None,
+        stop: str | list[str] | None = None,
+        stream: bool | None = None,
+        stream_options: dict[str, Any] | None = None,
+        temperature: float | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
+        tools: list[dict[str, Any]] | None = None,
+        top_logprobs: int | None = None,
+        top_p: float | None = None,
+        user: str | None = None,
+    ) -> OpenAIChatCompletion | AsyncIterator[OpenAIChatCompletionChunk]:
         model_obj = await self.model_store.get_model(model)
         params = await prepare_openai_completion_params(
             model=self.get_litellm_model_name(model_obj.provider_resource_id),
@@ -365,21 +412,21 @@ class LiteLLMOpenAIMixin(
     async def batch_completion(
         self,
         model_id: str,
-        content_batch: List[InterleavedContent],
-        sampling_params: Optional[SamplingParams] = None,
-        response_format: Optional[ResponseFormat] = None,
-        logprobs: Optional[LogProbConfig] = None,
+        content_batch: list[InterleavedContent],
+        sampling_params: SamplingParams | None = None,
+        response_format: ResponseFormat | None = None,
+        logprobs: LogProbConfig | None = None,
     ):
         raise NotImplementedError("Batch completion is not supported for OpenAI Compat")
 
     async def batch_chat_completion(
         self,
         model_id: str,
-        messages_batch: List[List[Message]],
-        sampling_params: Optional[SamplingParams] = None,
-        tools: Optional[List[ToolDefinition]] = None,
-        tool_config: Optional[ToolConfig] = None,
-        response_format: Optional[ResponseFormat] = None,
-        logprobs: Optional[LogProbConfig] = None,
+        messages_batch: list[list[Message]],
+        sampling_params: SamplingParams | None = None,
+        tools: list[ToolDefinition] | None = None,
+        tool_config: ToolConfig | None = None,
+        response_format: ResponseFormat | None = None,
+        logprobs: LogProbConfig | None = None,
     ):
         raise NotImplementedError("Batch chat completion is not supported for OpenAI Compat")

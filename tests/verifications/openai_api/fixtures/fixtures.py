@@ -12,6 +12,8 @@ import pytest
 import yaml
 from openai import OpenAI
 
+from llama_stack import LlamaStackAsLibraryClient
+
 # --- Helper Functions ---
 
 
@@ -33,7 +35,7 @@ def _load_all_verification_configs():
     for config_path in yaml_files:
         provider_name = config_path.stem
         try:
-            with open(config_path, "r") as f:
+            with open(config_path) as f:
                 provider_config = yaml.safe_load(f)
                 if provider_config:
                     all_provider_configs[provider_name] = provider_config
@@ -41,7 +43,7 @@ def _load_all_verification_configs():
                     # Log warning if possible, or just skip empty files silently
                     print(f"Warning: Config file {config_path} is empty or invalid.")
         except Exception as e:
-            raise IOError(f"Error loading config file {config_path}: {e}") from e
+            raise OSError(f"Error loading config file {config_path}: {e}") from e
 
     return {"providers": all_provider_configs}
 
@@ -49,7 +51,7 @@ def _load_all_verification_configs():
 def case_id_generator(case):
     """Generate a test ID from the case's 'case_id' field, or use a default."""
     case_id = case.get("case_id")
-    if isinstance(case_id, (str, int)):
+    if isinstance(case_id, str | int):
         return re.sub(r"\\W|^(?=\\d)", "_", str(case_id))
     return None
 
@@ -77,11 +79,11 @@ def verification_config():
     """Pytest fixture to provide the loaded verification config."""
     try:
         return _load_all_verification_configs()
-    except (FileNotFoundError, IOError) as e:
+    except (OSError, FileNotFoundError) as e:
         pytest.fail(str(e))  # Fail test collection if config loading fails
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 def provider(request, verification_config):
     provider = request.config.getoption("--provider")
     base_url = request.config.getoption("--base-url")
@@ -100,12 +102,14 @@ def provider(request, verification_config):
     return provider
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 def base_url(request, provider, verification_config):
-    return request.config.getoption("--base-url") or verification_config["providers"][provider]["base_url"]
+    return request.config.getoption("--base-url") or verification_config.get("providers", {}).get(provider, {}).get(
+        "base_url"
+    )
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 def api_key(request, provider, verification_config):
     provider_conf = verification_config.get("providers", {}).get(provider, {})
     api_key_env_var = provider_conf.get("api_key_var")
@@ -122,11 +126,21 @@ def model_mapping(provider, providers_model_mapping):
     return providers_model_mapping[provider]
 
 
-@pytest.fixture
-def openai_client(base_url, api_key):
+@pytest.fixture(scope="session")
+def openai_client(base_url, api_key, provider):
     # Simplify running against a local Llama Stack
-    if "localhost" in base_url and not api_key:
+    if base_url and "localhost" in base_url and not api_key:
         api_key = "empty"
+    if provider.startswith("stack:"):
+        parts = provider.split(":")
+        if len(parts) != 2:
+            raise ValueError(f"Invalid config for Llama Stack: {provider}, it must be of the form 'stack:<config>'")
+        config = parts[1]
+        client = LlamaStackAsLibraryClient(config, skip_logger_removal=True)
+        if not client.initialize():
+            raise RuntimeError("Initialization failed")
+        return client
+
     return OpenAI(
         base_url=base_url,
         api_key=api_key,
