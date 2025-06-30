@@ -6,7 +6,7 @@
 
 from pathlib import Path
 
-from llama_stack.apis.models.models import ModelType
+from llama_stack.apis.models import ModelType
 from llama_stack.distribution.datatypes import (
     ModelInput,
     Provider,
@@ -36,7 +36,6 @@ def get_distribution_template() -> DistributionTemplate:
         "tool_runtime": [
             "remote::brave-search",
             "remote::tavily-search",
-            "inline::code-interpreter",
             "inline::rag-runtime",
             "remote::model-context-protocol",
         ],
@@ -47,7 +46,7 @@ def get_distribution_template() -> DistributionTemplate:
         provider_type="inline::meta-reference",
         config=MetaReferenceInferenceConfig.sample_run_config(
             model="${env.INFERENCE_MODEL}",
-            checkpoint_dir="${env.INFERENCE_CHECKPOINT_DIR:null}",
+            checkpoint_dir="${env.INFERENCE_CHECKPOINT_DIR:=null}",
         ),
     )
     embedding_provider = Provider(
@@ -86,10 +85,6 @@ def get_distribution_template() -> DistributionTemplate:
             toolgroup_id="builtin::rag",
             provider_id="rag-runtime",
         ),
-        ToolGroupInput(
-            toolgroup_id="builtin::code_interpreter",
-            provider_id="code-interpreter",
-        ),
     ]
 
     return DistributionTemplate(
@@ -117,7 +112,7 @@ def get_distribution_template() -> DistributionTemplate:
                             provider_type="inline::meta-reference",
                             config=MetaReferenceInferenceConfig.sample_run_config(
                                 model="${env.SAFETY_MODEL}",
-                                checkpoint_dir="${env.SAFETY_CHECKPOINT_DIR:null}",
+                                checkpoint_dir="${env.SAFETY_CHECKPOINT_DIR:=null}",
                             ),
                         ),
                     ],

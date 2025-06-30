@@ -4,7 +4,6 @@
 # This source code is licensed under the terms described in the LICENSE file in
 # the root directory of this source tree.
 
-from typing import List
 
 from llama_stack.providers.datatypes import (
     AdapterSpec,
@@ -16,7 +15,6 @@ from llama_stack.providers.datatypes import (
 
 META_REFERENCE_DEPS = [
     "accelerate",
-    "blobfile",
     "fairscale",
     "torch",
     "torchvision",
@@ -29,7 +27,7 @@ META_REFERENCE_DEPS = [
 ]
 
 
-def available_providers() -> List[ProviderSpec]:
+def available_providers() -> list[ProviderSpec]:
     return [
         InlineProviderSpec(
             api=Api.inference,
@@ -72,7 +70,7 @@ def available_providers() -> List[ProviderSpec]:
             api=Api.inference,
             adapter=AdapterSpec(
                 adapter_type="ollama",
-                pip_packages=["ollama", "aiohttp"],
+                pip_packages=["ollama", "aiohttp", "h11>=0.16.0"],
                 config_class="llama_stack.providers.remote.inference.ollama.OllamaImplConfig",
                 module="llama_stack.providers.remote.inference.ollama",
             ),
@@ -281,11 +279,10 @@ def available_providers() -> List[ProviderSpec]:
             api=Api.inference,
             adapter=AdapterSpec(
                 adapter_type="sambanova",
-                pip_packages=[
-                    "openai",
-                ],
+                pip_packages=["litellm"],
                 module="llama_stack.providers.remote.inference.sambanova",
                 config_class="llama_stack.providers.remote.inference.sambanova.SambaNovaImplConfig",
+                provider_data_validator="llama_stack.providers.remote.inference.sambanova.config.SambaNovaProviderDataValidator",
             ),
         ),
         remote_provider_spec(

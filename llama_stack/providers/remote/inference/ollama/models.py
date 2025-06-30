@@ -4,7 +4,7 @@
 # This source code is licensed under the terms described in the LICENSE file in
 # the root directory of this source tree.
 
-from llama_stack.apis.models.models import ModelType
+from llama_stack.apis.models import ModelType
 from llama_stack.models.llama.sku_types import CoreModelId
 from llama_stack.providers.utils.inference.model_registry import (
     ProviderModelEntry,
@@ -12,7 +12,7 @@ from llama_stack.providers.utils.inference.model_registry import (
     build_model_entry,
 )
 
-model_entries = [
+MODEL_ENTRIES = [
     build_hf_repo_model_entry(
         "llama3.1:8b-instruct-fp16",
         CoreModelId.llama3_1_8b_instruct.value,

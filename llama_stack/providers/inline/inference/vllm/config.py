@@ -4,7 +4,7 @@
 # This source code is licensed under the terms described in the LICENSE file in
 # the root directory of this source tree.
 
-from typing import Any, Dict
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -42,12 +42,12 @@ class VLLMConfig(BaseModel):
     )
 
     @classmethod
-    def sample_run_config(cls, **kwargs: Any) -> Dict[str, Any]:
+    def sample_run_config(cls, **kwargs: Any) -> dict[str, Any]:
         return {
-            "tensor_parallel_size": "${env.TENSOR_PARALLEL_SIZE:1}",
-            "max_tokens": "${env.MAX_TOKENS:4096}",
-            "max_model_len": "${env.MAX_MODEL_LEN:4096}",
-            "max_num_seqs": "${env.MAX_NUM_SEQS:4}",
-            "enforce_eager": "${env.ENFORCE_EAGER:False}",
-            "gpu_memory_utilization": "${env.GPU_MEMORY_UTILIZATION:0.3}",
+            "tensor_parallel_size": "${env.TENSOR_PARALLEL_SIZE:=1}",
+            "max_tokens": "${env.MAX_TOKENS:=4096}",
+            "max_model_len": "${env.MAX_MODEL_LEN:=4096}",
+            "max_num_seqs": "${env.MAX_NUM_SEQS:=4}",
+            "enforce_eager": "${env.ENFORCE_EAGER:=False}",
+            "gpu_memory_utilization": "${env.GPU_MEMORY_UTILIZATION:=0.3}",
         }

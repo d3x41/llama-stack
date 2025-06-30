@@ -4,17 +4,16 @@
 # This source code is licensed under the terms described in the LICENSE file in
 # the root directory of this source tree.
 
-from typing import List
 
 from llama_stack.providers.datatypes import Api, InlineProviderSpec, ProviderSpec
 
 
-def available_providers() -> List[ProviderSpec]:
+def available_providers() -> list[ProviderSpec]:
     return [
         InlineProviderSpec(
             api=Api.scoring,
             provider_type="inline::basic",
-            pip_packages=[],
+            pip_packages=["requests"],
             module="llama_stack.providers.inline.scoring.basic",
             config_class="llama_stack.providers.inline.scoring.basic.BasicScoringConfig",
             api_dependencies=[

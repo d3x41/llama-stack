@@ -1,4 +1,4 @@
-version: '2'
+version: 2
 distribution_spec:
   description: Dell's distribution of Llama Stack. TGI inference via Dell's custom
     container
@@ -28,6 +28,8 @@ distribution_spec:
     tool_runtime:
     - remote::brave-search
     - remote::tavily-search
-    - inline::code-interpreter
     - inline::rag-runtime
 image_type: conda
+additional_pip_packages:
+- aiosqlite
+- sqlalchemy[asyncio]

@@ -1,4 +1,4 @@
-version: '2'
+version: 2
 distribution_spec:
   description: Use (an external) Ollama server for running LLM inference
   providers:
@@ -23,11 +23,17 @@ distribution_spec:
     - inline::basic
     - inline::llm-as-judge
     - inline::braintrust
+    files:
+    - inline::localfs
+    post_training:
+    - inline::huggingface
     tool_runtime:
     - remote::brave-search
     - remote::tavily-search
-    - inline::code-interpreter
     - inline::rag-runtime
     - remote::model-context-protocol
     - remote::wolfram-alpha
 image_type: conda
+additional_pip_packages:
+- aiosqlite
+- sqlalchemy[asyncio]

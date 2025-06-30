@@ -50,6 +50,7 @@ def mock_vector_db(vector_db_id) -> MagicMock:
     mock_vector_db = MagicMock(spec=VectorDB)
     mock_vector_db.embedding_model = "embedding_model"
     mock_vector_db.identifier = vector_db_id
+    mock_vector_db.embedding_dimension = 384
     return mock_vector_db
 
 
@@ -80,7 +81,7 @@ __QUERY = "Sample query"
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("max_query_chunks, expected_chunks", [(2, 2), (100, 30)])
+@pytest.mark.parametrize("max_query_chunks, expected_chunks", [(2, 2), (100, 60)])
 async def test_qdrant_adapter_returns_expected_chunks(
     qdrant_adapter: QdrantVectorIOAdapter,
     vector_db_id,
@@ -98,7 +99,7 @@ async def test_qdrant_adapter_returns_expected_chunks(
     response = await qdrant_adapter.query_chunks(
         query=__QUERY,
         vector_db_id=vector_db_id,
-        params={"max_chunks": max_query_chunks},
+        params={"max_chunks": max_query_chunks, "mode": "vector"},
     )
     assert isinstance(response, QueryChunksResponse)
     assert len(response.chunks) == expected_chunks

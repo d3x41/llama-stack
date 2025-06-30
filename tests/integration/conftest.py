@@ -15,8 +15,6 @@ from dotenv import load_dotenv
 
 from llama_stack.log import get_logger
 
-from .report import Report
-
 logger = get_logger(__name__, category="tests")
 
 
@@ -60,9 +58,6 @@ def pytest_configure(config):
         os.environ["DISABLE_CODE_SANDBOX"] = "1"
         logger.info("Setting DISABLE_CODE_SANDBOX=1 for macOS")
 
-    if config.getoption("--report"):
-        config.pluginmanager.register(Report(config))
-
 
 def pytest_addoption(parser):
     parser.addoption(
@@ -100,6 +95,7 @@ def pytest_addoption(parser):
     parser.addoption(
         "--embedding-dimension",
         type=int,
+        default=384,
         help="Output dimensionality of the embedding model to use for testing. Default: 384",
     )
     parser.addoption(

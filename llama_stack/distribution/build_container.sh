@@ -84,7 +84,7 @@ add_to_container() {
 }
 
 # Check if container command is available
-if ! is_command_available $CONTAINER_BINARY; then
+if ! is_command_available "$CONTAINER_BINARY"; then
   printf "${RED}Error: ${CONTAINER_BINARY} command not found. Is ${CONTAINER_BINARY} installed and in your PATH?${NC}" >&2
   exit 1
 fi
@@ -95,13 +95,13 @@ if [[ $container_base == *"registry.access.redhat.com/ubi9"* ]]; then
 FROM $container_base
 WORKDIR /app
 
-# We install the Python 3.11 dev headers and build tools so that any
+# We install the Python 3.12 dev headers and build tools so that any
 # C‑extension wheels (e.g. polyleven, faiss‑cpu) can compile successfully.
 
 RUN dnf -y update && dnf install -y iputils git net-tools wget \
-    vim-minimal python3.11 python3.11-pip python3.11-wheel \
-    python3.11-setuptools python3.11-devel gcc make && \
-    ln -s /bin/pip3.11 /bin/pip && ln -s /bin/python3.11 /bin/python && dnf clean all
+    vim-minimal python3.12 python3.12-pip python3.12-wheel \
+    python3.12-setuptools python3.12-devel gcc make && \
+    ln -s /bin/pip3.12 /bin/pip && ln -s /bin/python3.12 /bin/python && dnf clean all
 
 ENV UV_SYSTEM_PYTHON=1
 RUN pip install uv
@@ -157,28 +157,35 @@ get_python_cmd() {
 if [ -n "$run_config" ]; then
   # Copy the run config to the build context since it's an absolute path
   cp "$run_config" "$BUILD_CONTEXT_DIR/run.yaml"
-  add_to_container << EOF
-COPY run.yaml $RUN_CONFIG_PATH
-EOF
 
   # Parse the run.yaml configuration to identify external provider directories
   # If external providers are specified, copy their directory to the container
   # and update the configuration to reference the new container path
   python_cmd=$(get_python_cmd)
   external_providers_dir=$($python_cmd -c "import yaml; config = yaml.safe_load(open('$run_config')); print(config.get('external_providers_dir') or '')")
+  external_providers_dir=$(eval echo "$external_providers_dir")
   if [ -n "$external_providers_dir" ]; then
+    if [ -d "$external_providers_dir" ]; then
     echo "Copying external providers directory: $external_providers_dir"
+    cp -r "$external_providers_dir" "$BUILD_CONTEXT_DIR/providers.d"
     add_to_container << EOF
-COPY $external_providers_dir /app/providers.d
+COPY --chmod=g+w providers.d /.llama/providers.d
 EOF
-    # Edit the run.yaml file to change the external_providers_dir to /app/providers.d
+    fi
+
+    # Edit the run.yaml file to change the external_providers_dir to /.llama/providers.d
     if [ "$(uname)" = "Darwin" ]; then
-      sed -i.bak -e 's|external_providers_dir:.*|external_providers_dir: /app/providers.d|' "$BUILD_CONTEXT_DIR/run.yaml"
+      sed -i.bak -e 's|external_providers_dir:.*|external_providers_dir: /.llama/providers.d|' "$BUILD_CONTEXT_DIR/run.yaml"
       rm -f "$BUILD_CONTEXT_DIR/run.yaml.bak"
     else
-      sed -i 's|external_providers_dir:.*|external_providers_dir: /app/providers.d|' "$BUILD_CONTEXT_DIR/run.yaml"
+      sed -i 's|external_providers_dir:.*|external_providers_dir: /.llama/providers.d|' "$BUILD_CONTEXT_DIR/run.yaml"
     fi
   fi
+
+  # Copy run config into docker image
+  add_to_container << EOF
+COPY run.yaml $RUN_CONFIG_PATH
+EOF
 fi
 
 stack_mount="/app/llama-stack-source"
@@ -255,10 +262,7 @@ fi
 # Add other require item commands genearic to all containers
 add_to_container << EOF
 
-# Allows running as non-root user
-RUN mkdir -p /.llama /.cache
-
-RUN chmod -R g+rw /app /.llama /.cache
+RUN mkdir -p /.llama /.cache && chmod -R g+rw /app /.llama /.cache
 EOF
 
 printf "Containerfile created successfully in %s/Containerfile\n\n" "$TEMP_DIR"

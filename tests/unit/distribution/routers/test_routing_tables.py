@@ -13,33 +13,17 @@ import pytest
 from llama_stack.apis.common.type_system import NumberType
 from llama_stack.apis.datasets.datasets import Dataset, DatasetPurpose, URIDataSource
 from llama_stack.apis.datatypes import Api
-from llama_stack.apis.models.models import Model, ModelType
+from llama_stack.apis.models import Model, ModelType
 from llama_stack.apis.shields.shields import Shield
-from llama_stack.apis.tools import ListToolDefsResponse, ToolDef, ToolParameter
+from llama_stack.apis.tools import ListToolDefsResponse, ToolDef, ToolGroup, ToolParameter
 from llama_stack.apis.vector_dbs.vector_dbs import VectorDB
-from llama_stack.distribution.routers.routing_tables import (
-    BenchmarksRoutingTable,
-    DatasetsRoutingTable,
-    ModelsRoutingTable,
-    ScoringFunctionsRoutingTable,
-    ShieldsRoutingTable,
-    ToolGroupsRoutingTable,
-    VectorDBsRoutingTable,
-)
-from llama_stack.distribution.store.registry import CachedDiskDistributionRegistry
-from llama_stack.providers.utils.kvstore.config import SqliteKVStoreConfig
-from llama_stack.providers.utils.kvstore.sqlite import SqliteKVStoreImpl
-
-
-@pytest.fixture
-async def dist_registry(tmp_path):
-    db_path = tmp_path / "test_kv.db"
-    kvstore_config = SqliteKVStoreConfig(db_path=db_path.as_posix())
-    kvstore = SqliteKVStoreImpl(kvstore_config)
-    await kvstore.initialize()
-    registry = CachedDiskDistributionRegistry(kvstore)
-    await registry.initialize()
-    yield registry
+from llama_stack.distribution.routing_tables.benchmarks import BenchmarksRoutingTable
+from llama_stack.distribution.routing_tables.datasets import DatasetsRoutingTable
+from llama_stack.distribution.routing_tables.models import ModelsRoutingTable
+from llama_stack.distribution.routing_tables.scoring_functions import ScoringFunctionsRoutingTable
+from llama_stack.distribution.routing_tables.shields import ShieldsRoutingTable
+from llama_stack.distribution.routing_tables.toolgroups import ToolGroupsRoutingTable
+from llama_stack.distribution.routing_tables.vector_dbs import VectorDBsRoutingTable
 
 
 class Impl:
@@ -117,11 +101,11 @@ class ToolGroupsImpl(Impl):
     def __init__(self):
         super().__init__(Api.tool_runtime)
 
-    async def register_tool(self, tool):
-        return tool
+    async def register_toolgroup(self, toolgroup: ToolGroup):
+        return toolgroup
 
-    async def unregister_tool(self, tool_name: str):
-        return tool_name
+    async def unregister_toolgroup(self, toolgroup_id: str):
+        return toolgroup_id
 
     async def list_runtime_tools(self, toolgroup_id, mcp_endpoint):
         return ListToolDefsResponse(
@@ -136,8 +120,8 @@ class ToolGroupsImpl(Impl):
 
 
 @pytest.mark.asyncio
-async def test_models_routing_table(dist_registry):
-    table = ModelsRoutingTable({"test_provider": InferenceImpl()}, dist_registry)
+async def test_models_routing_table(cached_disk_dist_registry):
+    table = ModelsRoutingTable({"test_provider": InferenceImpl()}, cached_disk_dist_registry, {})
     await table.initialize()
 
     # Register multiple models and verify listing
@@ -178,8 +162,8 @@ async def test_models_routing_table(dist_registry):
 
 
 @pytest.mark.asyncio
-async def test_shields_routing_table(dist_registry):
-    table = ShieldsRoutingTable({"test_provider": SafetyImpl()}, dist_registry)
+async def test_shields_routing_table(cached_disk_dist_registry):
+    table = ShieldsRoutingTable({"test_provider": SafetyImpl()}, cached_disk_dist_registry, {})
     await table.initialize()
 
     # Register multiple shields and verify listing
@@ -194,15 +178,15 @@ async def test_shields_routing_table(dist_registry):
 
 
 @pytest.mark.asyncio
-async def test_vectordbs_routing_table(dist_registry):
-    table = VectorDBsRoutingTable({"test_provider": VectorDBImpl()}, dist_registry)
+async def test_vectordbs_routing_table(cached_disk_dist_registry):
+    table = VectorDBsRoutingTable({"test_provider": VectorDBImpl()}, cached_disk_dist_registry, {})
     await table.initialize()
 
-    m_table = ModelsRoutingTable({"test_providere": InferenceImpl()}, dist_registry)
+    m_table = ModelsRoutingTable({"test_provider": InferenceImpl()}, cached_disk_dist_registry, {})
     await m_table.initialize()
     await m_table.register_model(
         model_id="test-model",
-        provider_id="test_providere",
+        provider_id="test_provider",
         metadata={"embedding_dimension": 128},
         model_type=ModelType.embedding,
     )
@@ -224,8 +208,8 @@ async def test_vectordbs_routing_table(dist_registry):
     assert len(vector_dbs.data) == 0
 
 
-async def test_datasets_routing_table(dist_registry):
-    table = DatasetsRoutingTable({"localfs": DatasetsImpl()}, dist_registry)
+async def test_datasets_routing_table(cached_disk_dist_registry):
+    table = DatasetsRoutingTable({"localfs": DatasetsImpl()}, cached_disk_dist_registry, {})
     await table.initialize()
 
     # Register multiple datasets and verify listing
@@ -250,8 +234,8 @@ async def test_datasets_routing_table(dist_registry):
 
 
 @pytest.mark.asyncio
-async def test_scoring_functions_routing_table(dist_registry):
-    table = ScoringFunctionsRoutingTable({"test_provider": ScoringFunctionsImpl()}, dist_registry)
+async def test_scoring_functions_routing_table(cached_disk_dist_registry):
+    table = ScoringFunctionsRoutingTable({"test_provider": ScoringFunctionsImpl()}, cached_disk_dist_registry, {})
     await table.initialize()
 
     # Register multiple scoring functions and verify listing
@@ -276,8 +260,8 @@ async def test_scoring_functions_routing_table(dist_registry):
 
 
 @pytest.mark.asyncio
-async def test_benchmarks_routing_table(dist_registry):
-    table = BenchmarksRoutingTable({"test_provider": BenchmarksImpl()}, dist_registry)
+async def test_benchmarks_routing_table(cached_disk_dist_registry):
+    table = BenchmarksRoutingTable({"test_provider": BenchmarksImpl()}, cached_disk_dist_registry, {})
     await table.initialize()
 
     # Register multiple benchmarks and verify listing
@@ -294,8 +278,8 @@ async def test_benchmarks_routing_table(dist_registry):
 
 
 @pytest.mark.asyncio
-async def test_tool_groups_routing_table(dist_registry):
-    table = ToolGroupsRoutingTable({"test_provider": ToolGroupsImpl()}, dist_registry)
+async def test_tool_groups_routing_table(cached_disk_dist_registry):
+    table = ToolGroupsRoutingTable({"test_provider": ToolGroupsImpl()}, cached_disk_dist_registry, {})
     await table.initialize()
 
     # Register multiple tool groups and verify listing

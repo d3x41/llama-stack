@@ -5,7 +5,7 @@
 # the root directory of this source tree.
 
 import logging
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import psycopg2
 from numpy.typing import NDArray
@@ -15,7 +15,21 @@ from pydantic import BaseModel, TypeAdapter
 
 from llama_stack.apis.inference import InterleavedContent
 from llama_stack.apis.vector_dbs import VectorDB
-from llama_stack.apis.vector_io import Chunk, QueryChunksResponse, VectorIO
+from llama_stack.apis.vector_io import (
+    Chunk,
+    QueryChunksResponse,
+    SearchRankingOptions,
+    VectorIO,
+    VectorStoreChunkingStrategy,
+    VectorStoreDeleteResponse,
+    VectorStoreFileContentsResponse,
+    VectorStoreFileObject,
+    VectorStoreFileStatus,
+    VectorStoreListFilesResponse,
+    VectorStoreListResponse,
+    VectorStoreObject,
+    VectorStoreSearchResponsePage,
+)
 from llama_stack.providers.datatypes import Api, VectorDBsProtocolPrivate
 from llama_stack.providers.utils.memory.vector_store import (
     EmbeddingIndex,
@@ -33,7 +47,7 @@ def check_extension_version(cur):
     return result[0] if result else None
 
 
-def upsert_models(conn, keys_models: List[Tuple[str, BaseModel]]):
+def upsert_models(conn, keys_models: list[tuple[str, BaseModel]]):
     with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
         query = sql.SQL(
             """
@@ -74,7 +88,7 @@ class PGVectorIndex(EmbeddingIndex):
             """
             )
 
-    async def add_chunks(self, chunks: List[Chunk], embeddings: NDArray):
+    async def add_chunks(self, chunks: list[Chunk], embeddings: NDArray):
         assert len(chunks) == len(embeddings), (
             f"Chunk length {len(chunks)} does not match embedding length {len(embeddings)}"
         )
@@ -99,7 +113,7 @@ class PGVectorIndex(EmbeddingIndex):
         with self.conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
             execute_values(cur, query, values, template="(%s, %s, %s::vector)")
 
-    async def query(self, embedding: NDArray, k: int, score_threshold: float) -> QueryChunksResponse:
+    async def query_vector(self, embedding: NDArray, k: int, score_threshold: float) -> QueryChunksResponse:
         with self.conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
             cur.execute(
                 f"""
@@ -116,9 +130,28 @@ class PGVectorIndex(EmbeddingIndex):
             scores = []
             for doc, dist in results:
                 chunks.append(Chunk(**doc))
-                scores.append(1.0 / float(dist))
+                scores.append(1.0 / float(dist) if dist != 0 else float("inf"))
 
             return QueryChunksResponse(chunks=chunks, scores=scores)
+
+    async def query_keyword(
+        self,
+        query_string: str,
+        k: int,
+        score_threshold: float,
+    ) -> QueryChunksResponse:
+        raise NotImplementedError("Keyword search is not supported in PGVector")
+
+    async def query_hybrid(
+        self,
+        embedding: NDArray,
+        query_string: str,
+        k: int,
+        score_threshold: float,
+        reranker_type: str,
+        reranker_params: dict[str, Any] | None = None,
+    ) -> QueryChunksResponse:
+        raise NotImplementedError("Hybrid search is not supported in PGVector")
 
     async def delete(self):
         with self.conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
@@ -180,8 +213,8 @@ class PGVectorVectorIOAdapter(VectorIO, VectorDBsProtocolPrivate):
     async def insert_chunks(
         self,
         vector_db_id: str,
-        chunks: List[Chunk],
-        ttl_seconds: Optional[int] = None,
+        chunks: list[Chunk],
+        ttl_seconds: int | None = None,
     ) -> None:
         index = await self._get_and_cache_vector_db_index(vector_db_id)
         await index.insert_chunks(chunks)
@@ -190,7 +223,7 @@ class PGVectorVectorIOAdapter(VectorIO, VectorDBsProtocolPrivate):
         self,
         vector_db_id: str,
         query: InterleavedContent,
-        params: Optional[Dict[str, Any]] = None,
+        params: dict[str, Any] | None = None,
     ) -> QueryChunksResponse:
         index = await self._get_and_cache_vector_db_index(vector_db_id)
         return await index.query_chunks(query, params)
@@ -203,3 +236,108 @@ class PGVectorVectorIOAdapter(VectorIO, VectorDBsProtocolPrivate):
         index = PGVectorIndex(vector_db, vector_db.embedding_dimension, self.conn)
         self.cache[vector_db_id] = VectorDBWithIndex(vector_db, index, self.inference_api)
         return self.cache[vector_db_id]
+
+    async def openai_create_vector_store(
+        self,
+        name: str,
+        file_ids: list[str] | None = None,
+        expires_after: dict[str, Any] | None = None,
+        chunking_strategy: dict[str, Any] | None = None,
+        metadata: dict[str, Any] | None = None,
+        embedding_model: str | None = None,
+        embedding_dimension: int | None = 384,
+        provider_id: str | None = None,
+        provider_vector_db_id: str | None = None,
+    ) -> VectorStoreObject:
+        raise NotImplementedError("OpenAI Vector Stores API is not supported in PGVector")
+
+    async def openai_list_vector_stores(
+        self,
+        limit: int | None = 20,
+        order: str | None = "desc",
+        after: str | None = None,
+        before: str | None = None,
+    ) -> VectorStoreListResponse:
+        raise NotImplementedError("OpenAI Vector Stores API is not supported in PGVector")
+
+    async def openai_retrieve_vector_store(
+        self,
+        vector_store_id: str,
+    ) -> VectorStoreObject:
+        raise NotImplementedError("OpenAI Vector Stores API is not supported in PGVector")
+
+    async def openai_update_vector_store(
+        self,
+        vector_store_id: str,
+        name: str | None = None,
+        expires_after: dict[str, Any] | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> VectorStoreObject:
+        raise NotImplementedError("OpenAI Vector Stores API is not supported in PGVector")
+
+    async def openai_delete_vector_store(
+        self,
+        vector_store_id: str,
+    ) -> VectorStoreDeleteResponse:
+        raise NotImplementedError("OpenAI Vector Stores API is not supported in PGVector")
+
+    async def openai_search_vector_store(
+        self,
+        vector_store_id: str,
+        query: str | list[str],
+        filters: dict[str, Any] | None = None,
+        max_num_results: int | None = 10,
+        ranking_options: SearchRankingOptions | None = None,
+        rewrite_query: bool | None = False,
+        search_mode: str | None = "vector",
+    ) -> VectorStoreSearchResponsePage:
+        raise NotImplementedError("OpenAI Vector Stores API is not supported in PGVector")
+
+    async def openai_attach_file_to_vector_store(
+        self,
+        vector_store_id: str,
+        file_id: str,
+        attributes: dict[str, Any] | None = None,
+        chunking_strategy: VectorStoreChunkingStrategy | None = None,
+    ) -> VectorStoreFileObject:
+        raise NotImplementedError("OpenAI Vector Stores API is not supported in PGVector")
+
+    async def openai_list_files_in_vector_store(
+        self,
+        vector_store_id: str,
+        limit: int | None = 20,
+        order: str | None = "desc",
+        after: str | None = None,
+        before: str | None = None,
+        filter: VectorStoreFileStatus | None = None,
+    ) -> VectorStoreListFilesResponse:
+        raise NotImplementedError("OpenAI Vector Stores API is not supported in PGVector")
+
+    async def openai_retrieve_vector_store_file(
+        self,
+        vector_store_id: str,
+        file_id: str,
+    ) -> VectorStoreFileObject:
+        raise NotImplementedError("OpenAI Vector Stores API is not supported in PGVector")
+
+    async def openai_retrieve_vector_store_file_contents(
+        self,
+        vector_store_id: str,
+        file_id: str,
+    ) -> VectorStoreFileContentsResponse:
+        raise NotImplementedError("OpenAI Vector Stores API is not supported in PGVector")
+
+    async def openai_update_vector_store_file(
+        self,
+        vector_store_id: str,
+        file_id: str,
+        attributes: dict[str, Any] | None = None,
+    ) -> VectorStoreFileObject:
+        raise NotImplementedError("OpenAI Vector Stores API is not supported in PGVector")
+
+    async def openai_delete_vector_store_file(
+        self,
+        vector_store_id: str,
+        file_id: str,
+    ) -> VectorStoreFileObject:
+        raise NotImplementedError("OpenAI Vector Stores API is not supported in PGVector")
