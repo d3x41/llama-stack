@@ -4,7 +4,7 @@
 # This source code is licensed under the terms described in the LICENSE file in
 # the root directory of this source tree.
 
-from llama_stack.apis.models.models import ModelType
+from llama_stack.apis.models import ModelType
 from llama_stack.providers.utils.inference.model_registry import (
     ProviderModelEntry,
 )
@@ -12,6 +12,9 @@ from llama_stack.providers.utils.inference.model_registry import (
 LLM_MODEL_IDS = [
     "gemini/gemini-1.5-flash",
     "gemini/gemini-1.5-pro",
+    "gemini/gemini-2.0-flash",
+    "gemini/gemini-2.5-flash",
+    "gemini/gemini-2.5-pro",
 ]
 
 
