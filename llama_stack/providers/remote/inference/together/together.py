@@ -4,7 +4,8 @@
 # This source code is licensed under the terms described in the LICENSE file in
 # the root directory of this source tree.
 
-from typing import Any, AsyncGenerator, AsyncIterator, Dict, List, Optional, Union
+from collections.abc import AsyncGenerator, AsyncIterator
+from typing import Any
 
 from openai import AsyncOpenAI
 from together import AsyncTogether
@@ -22,6 +23,12 @@ from llama_stack.apis.inference import (
     Inference,
     LogProbConfig,
     Message,
+    OpenAIChatCompletion,
+    OpenAIChatCompletionChunk,
+    OpenAICompletion,
+    OpenAIEmbeddingsResponse,
+    OpenAIMessageParam,
+    OpenAIResponseFormatParam,
     ResponseFormat,
     ResponseFormatType,
     SamplingParams,
@@ -30,13 +37,6 @@ from llama_stack.apis.inference import (
     ToolConfig,
     ToolDefinition,
     ToolPromptFormat,
-)
-from llama_stack.apis.inference.inference import (
-    OpenAIChatCompletion,
-    OpenAIChatCompletionChunk,
-    OpenAICompletion,
-    OpenAIMessageParam,
-    OpenAIResponseFormatParam,
 )
 from llama_stack.distribution.request_headers import NeedsRequestProviderData
 from llama_stack.log import get_logger
@@ -68,28 +68,21 @@ class TogetherInferenceAdapter(ModelRegistryHelper, Inference, NeedsRequestProvi
     def __init__(self, config: TogetherImplConfig) -> None:
         ModelRegistryHelper.__init__(self, MODEL_ENTRIES)
         self.config = config
-        self._client = None
-        self._openai_client = None
 
     async def initialize(self) -> None:
         pass
 
     async def shutdown(self) -> None:
-        if self._client:
-            # Together client has no close method, so just set to None
-            self._client = None
-        if self._openai_client:
-            await self._openai_client.close()
-            self._openai_client = None
+        pass
 
     async def completion(
         self,
         model_id: str,
         content: InterleavedContent,
-        sampling_params: Optional[SamplingParams] = None,
-        response_format: Optional[ResponseFormat] = None,
-        stream: Optional[bool] = False,
-        logprobs: Optional[LogProbConfig] = None,
+        sampling_params: SamplingParams | None = None,
+        response_format: ResponseFormat | None = None,
+        stream: bool | None = False,
+        logprobs: LogProbConfig | None = None,
     ) -> AsyncGenerator:
         if sampling_params is None:
             sampling_params = SamplingParams()
@@ -108,29 +101,25 @@ class TogetherInferenceAdapter(ModelRegistryHelper, Inference, NeedsRequestProvi
             return await self._nonstream_completion(request)
 
     def _get_client(self) -> AsyncTogether:
-        if not self._client:
-            together_api_key = None
-            config_api_key = self.config.api_key.get_secret_value() if self.config.api_key else None
-            if config_api_key:
-                together_api_key = config_api_key
-            else:
-                provider_data = self.get_request_provider_data()
-                if provider_data is None or not provider_data.together_api_key:
-                    raise ValueError(
-                        'Pass Together API Key in the header X-LlamaStack-Provider-Data as { "together_api_key": <your api key>}'
-                    )
-                together_api_key = provider_data.together_api_key
-            self._client = AsyncTogether(api_key=together_api_key)
-        return self._client
+        together_api_key = None
+        config_api_key = self.config.api_key.get_secret_value() if self.config.api_key else None
+        if config_api_key:
+            together_api_key = config_api_key
+        else:
+            provider_data = self.get_request_provider_data()
+            if provider_data is None or not provider_data.together_api_key:
+                raise ValueError(
+                    'Pass Together API Key in the header X-LlamaStack-Provider-Data as { "together_api_key": <your api key>}'
+                )
+            together_api_key = provider_data.together_api_key
+        return AsyncTogether(api_key=together_api_key)
 
     def _get_openai_client(self) -> AsyncOpenAI:
-        if not self._openai_client:
-            together_client = self._get_client().client
-            self._openai_client = AsyncOpenAI(
-                base_url=together_client.base_url,
-                api_key=together_client.api_key,
-            )
-        return self._openai_client
+        together_client = self._get_client().client
+        return AsyncOpenAI(
+            base_url=together_client.base_url,
+            api_key=together_client.api_key,
+        )
 
     async def _nonstream_completion(self, request: CompletionRequest) -> ChatCompletionResponse:
         params = await self._get_params(request)
@@ -147,8 +136,8 @@ class TogetherInferenceAdapter(ModelRegistryHelper, Inference, NeedsRequestProvi
 
     def _build_options(
         self,
-        sampling_params: Optional[SamplingParams],
-        logprobs: Optional[LogProbConfig],
+        sampling_params: SamplingParams | None,
+        logprobs: LogProbConfig | None,
         fmt: ResponseFormat,
     ) -> dict:
         options = get_sampling_options(sampling_params)
@@ -175,15 +164,15 @@ class TogetherInferenceAdapter(ModelRegistryHelper, Inference, NeedsRequestProvi
     async def chat_completion(
         self,
         model_id: str,
-        messages: List[Message],
-        sampling_params: Optional[SamplingParams] = None,
-        tools: Optional[List[ToolDefinition]] = None,
-        tool_choice: Optional[ToolChoice] = ToolChoice.auto,
-        tool_prompt_format: Optional[ToolPromptFormat] = None,
-        response_format: Optional[ResponseFormat] = None,
-        stream: Optional[bool] = False,
-        logprobs: Optional[LogProbConfig] = None,
-        tool_config: Optional[ToolConfig] = None,
+        messages: list[Message],
+        sampling_params: SamplingParams | None = None,
+        tools: list[ToolDefinition] | None = None,
+        tool_choice: ToolChoice | None = ToolChoice.auto,
+        tool_prompt_format: ToolPromptFormat | None = None,
+        response_format: ResponseFormat | None = None,
+        stream: bool | None = False,
+        logprobs: LogProbConfig | None = None,
+        tool_config: ToolConfig | None = None,
     ) -> AsyncGenerator:
         if sampling_params is None:
             sampling_params = SamplingParams()
@@ -224,7 +213,7 @@ class TogetherInferenceAdapter(ModelRegistryHelper, Inference, NeedsRequestProvi
         async for chunk in process_chat_completion_stream_response(stream, request):
             yield chunk
 
-    async def _get_params(self, request: Union[ChatCompletionRequest, CompletionRequest]) -> dict:
+    async def _get_params(self, request: ChatCompletionRequest | CompletionRequest) -> dict:
         input_dict = {}
         media_present = request_has_media(request)
         llama_model = self.get_llama_model(request.model)
@@ -249,10 +238,10 @@ class TogetherInferenceAdapter(ModelRegistryHelper, Inference, NeedsRequestProvi
     async def embeddings(
         self,
         model_id: str,
-        contents: List[str] | List[InterleavedContentItem],
-        text_truncation: Optional[TextTruncation] = TextTruncation.none,
-        output_dimension: Optional[int] = None,
-        task_type: Optional[EmbeddingTaskType] = None,
+        contents: list[str] | list[InterleavedContentItem],
+        text_truncation: TextTruncation | None = TextTruncation.none,
+        output_dimension: int | None = None,
+        task_type: EmbeddingTaskType | None = None,
     ) -> EmbeddingsResponse:
         model = await self.model_store.get_model(model_id)
         assert all(not content_has_media(content) for content in contents), (
@@ -266,27 +255,38 @@ class TogetherInferenceAdapter(ModelRegistryHelper, Inference, NeedsRequestProvi
         embeddings = [item.embedding for item in r.data]
         return EmbeddingsResponse(embeddings=embeddings)
 
+    async def openai_embeddings(
+        self,
+        model: str,
+        input: str | list[str],
+        encoding_format: str | None = "float",
+        dimensions: int | None = None,
+        user: str | None = None,
+    ) -> OpenAIEmbeddingsResponse:
+        raise NotImplementedError()
+
     async def openai_completion(
         self,
         model: str,
-        prompt: Union[str, List[str], List[int], List[List[int]]],
-        best_of: Optional[int] = None,
-        echo: Optional[bool] = None,
-        frequency_penalty: Optional[float] = None,
-        logit_bias: Optional[Dict[str, float]] = None,
-        logprobs: Optional[bool] = None,
-        max_tokens: Optional[int] = None,
-        n: Optional[int] = None,
-        presence_penalty: Optional[float] = None,
-        seed: Optional[int] = None,
-        stop: Optional[Union[str, List[str]]] = None,
-        stream: Optional[bool] = None,
-        stream_options: Optional[Dict[str, Any]] = None,
-        temperature: Optional[float] = None,
-        top_p: Optional[float] = None,
-        user: Optional[str] = None,
-        guided_choice: Optional[List[str]] = None,
-        prompt_logprobs: Optional[int] = None,
+        prompt: str | list[str] | list[int] | list[list[int]],
+        best_of: int | None = None,
+        echo: bool | None = None,
+        frequency_penalty: float | None = None,
+        logit_bias: dict[str, float] | None = None,
+        logprobs: bool | None = None,
+        max_tokens: int | None = None,
+        n: int | None = None,
+        presence_penalty: float | None = None,
+        seed: int | None = None,
+        stop: str | list[str] | None = None,
+        stream: bool | None = None,
+        stream_options: dict[str, Any] | None = None,
+        temperature: float | None = None,
+        top_p: float | None = None,
+        user: str | None = None,
+        guided_choice: list[str] | None = None,
+        prompt_logprobs: int | None = None,
+        suffix: str | None = None,
     ) -> OpenAICompletion:
         model_obj = await self.model_store.get_model(model)
         params = await prepare_openai_completion_params(
@@ -313,29 +313,29 @@ class TogetherInferenceAdapter(ModelRegistryHelper, Inference, NeedsRequestProvi
     async def openai_chat_completion(
         self,
         model: str,
-        messages: List[OpenAIMessageParam],
-        frequency_penalty: Optional[float] = None,
-        function_call: Optional[Union[str, Dict[str, Any]]] = None,
-        functions: Optional[List[Dict[str, Any]]] = None,
-        logit_bias: Optional[Dict[str, float]] = None,
-        logprobs: Optional[bool] = None,
-        max_completion_tokens: Optional[int] = None,
-        max_tokens: Optional[int] = None,
-        n: Optional[int] = None,
-        parallel_tool_calls: Optional[bool] = None,
-        presence_penalty: Optional[float] = None,
-        response_format: Optional[OpenAIResponseFormatParam] = None,
-        seed: Optional[int] = None,
-        stop: Optional[Union[str, List[str]]] = None,
-        stream: Optional[bool] = None,
-        stream_options: Optional[Dict[str, Any]] = None,
-        temperature: Optional[float] = None,
-        tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
-        tools: Optional[List[Dict[str, Any]]] = None,
-        top_logprobs: Optional[int] = None,
-        top_p: Optional[float] = None,
-        user: Optional[str] = None,
-    ) -> Union[OpenAIChatCompletion, AsyncIterator[OpenAIChatCompletionChunk]]:
+        messages: list[OpenAIMessageParam],
+        frequency_penalty: float | None = None,
+        function_call: str | dict[str, Any] | None = None,
+        functions: list[dict[str, Any]] | None = None,
+        logit_bias: dict[str, float] | None = None,
+        logprobs: bool | None = None,
+        max_completion_tokens: int | None = None,
+        max_tokens: int | None = None,
+        n: int | None = None,
+        parallel_tool_calls: bool | None = None,
+        presence_penalty: float | None = None,
+        response_format: OpenAIResponseFormatParam | None = None,
+        seed: int | None = None,
+        stop: str | list[str] | None = None,
+        stream: bool | None = None,
+        stream_options: dict[str, Any] | None = None,
+        temperature: float | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
+        tools: list[dict[str, Any]] | None = None,
+        top_logprobs: int | None = None,
+        top_p: float | None = None,
+        user: str | None = None,
+    ) -> OpenAIChatCompletion | AsyncIterator[OpenAIChatCompletionChunk]:
         model_obj = await self.model_store.get_model(model)
         params = await prepare_openai_completion_params(
             model=model_obj.provider_resource_id,

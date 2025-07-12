@@ -5,7 +5,6 @@
 # the root directory of this source tree.
 
 from datetime import datetime
-from typing import Optional
 
 from pydantic import BaseModel
 
@@ -20,11 +19,13 @@ class PostTrainingMetric(BaseModel):
     perplexity: float
 
 
-@json_schema_type(schema={"description": "Checkpoint created during training runs"})
+@json_schema_type
 class Checkpoint(BaseModel):
+    """Checkpoint created during training runs"""
+
     identifier: str
     created_at: datetime
     epoch: int
     post_training_job_id: str
     path: str
-    training_metrics: Optional[PostTrainingMetric] = None
+    training_metrics: PostTrainingMetric | None = None

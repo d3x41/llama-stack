@@ -6,7 +6,7 @@
 
 import re
 from string import Template
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from llama_stack.apis.common.content_types import ImageContentItem, TextContentItem
 from llama_stack.apis.inference import (
@@ -93,12 +93,17 @@ LLAMA_GUARD_MODEL_IDS = {
     "meta-llama/Llama-Guard-3-1B": "meta-llama/Llama-Guard-3-1B",
     CoreModelId.llama_guard_3_11b_vision.value: "meta-llama/Llama-Guard-3-11B-Vision",
     "meta-llama/Llama-Guard-3-11B-Vision": "meta-llama/Llama-Guard-3-11B-Vision",
+    CoreModelId.llama_guard_4_12b.value: "meta-llama/Llama-Guard-4-12B",
+    "meta-llama/Llama-Guard-4-12B": "meta-llama/Llama-Guard-4-12B",
 }
 
 MODEL_TO_SAFETY_CATEGORIES_MAP = {
     "meta-llama/Llama-Guard-3-8B": DEFAULT_LG_V3_SAFETY_CATEGORIES + [CAT_CODE_INTERPRETER_ABUSE],
     "meta-llama/Llama-Guard-3-1B": DEFAULT_LG_V3_SAFETY_CATEGORIES,
     "meta-llama/Llama-Guard-3-11B-Vision": DEFAULT_LG_V3_SAFETY_CATEGORIES,
+    # Llama Guard 4 uses the same categories as Llama Guard 3
+    # source: https://github.com/meta-llama/PurpleLlama/blob/main/Llama-Guard4/12B/MODEL_CARD.md
+    "meta-llama/Llama-Guard-4-12B": DEFAULT_LG_V3_SAFETY_CATEGORIES,
 }
 
 
@@ -141,16 +146,15 @@ class LlamaGuardSafetyImpl(Safety, ShieldsProtocolPrivate):
         pass
 
     async def register_shield(self, shield: Shield) -> None:
-        if shield.provider_resource_id not in LLAMA_GUARD_MODEL_IDS:
-            raise ValueError(
-                f"Unsupported Llama Guard type: {shield.provider_resource_id}. Allowed types: {LLAMA_GUARD_MODEL_IDS}"
-            )
+        # Allow any model to be registered as a shield
+        # The model will be validated during runtime when making inference calls
+        pass
 
     async def run_shield(
         self,
         shield_id: str,
-        messages: List[Message],
-        params: Dict[str, Any] = None,
+        messages: list[Message],
+        params: dict[str, Any] = None,
     ) -> RunShieldResponse:
         shield = await self.shield_store.get_shield(shield_id)
         if not shield:
@@ -162,11 +166,25 @@ class LlamaGuardSafetyImpl(Safety, ShieldsProtocolPrivate):
         if len(messages) > 0 and messages[0].role != Role.user.value:
             messages[0] = UserMessage(content=messages[0].content)
 
-        model = LLAMA_GUARD_MODEL_IDS[shield.provider_resource_id]
+        # Use the inference API's model resolution instead of hardcoded mappings
+        # This allows the shield to work with any registered model
+        model_id = shield.provider_resource_id
+
+        # Determine safety categories based on the model type
+        # For known Llama Guard models, use specific categories
+        if model_id in LLAMA_GUARD_MODEL_IDS:
+            # Use the mapped model for categories but the original model_id for inference
+            mapped_model = LLAMA_GUARD_MODEL_IDS[model_id]
+            safety_categories = MODEL_TO_SAFETY_CATEGORIES_MAP.get(mapped_model, DEFAULT_LG_V3_SAFETY_CATEGORIES)
+        else:
+            # For unknown models, use default Llama Guard 3 8B categories
+            safety_categories = DEFAULT_LG_V3_SAFETY_CATEGORIES + [CAT_CODE_INTERPRETER_ABUSE]
+
         impl = LlamaGuardShield(
-            model=model,
+            model=model_id,
             inference_api=self.inference_api,
             excluded_categories=self.config.excluded_categories,
+            safety_categories=safety_categories,
         )
 
         return await impl.run(messages)
@@ -177,23 +195,24 @@ class LlamaGuardShield:
         self,
         model: str,
         inference_api: Inference,
-        excluded_categories: Optional[List[str]] = None,
+        excluded_categories: list[str] | None = None,
+        safety_categories: list[str] | None = None,
     ):
         if excluded_categories is None:
             excluded_categories = []
+        if safety_categories is None:
+            safety_categories = []
 
         assert len(excluded_categories) == 0 or all(
             x in SAFETY_CATEGORIES_TO_CODE_MAP.values() for x in excluded_categories
         ), "Invalid categories in excluded categories. Expected format is ['S1', 'S2', ..]"
 
-        if model not in MODEL_TO_SAFETY_CATEGORIES_MAP:
-            raise ValueError(f"Unsupported model: {model}")
-
         self.model = model
         self.inference_api = inference_api
         self.excluded_categories = excluded_categories
+        self.safety_categories = safety_categories
 
-    def check_unsafe_response(self, response: str) -> Optional[str]:
+    def check_unsafe_response(self, response: str) -> str | None:
         match = re.match(r"^unsafe\n(.*)$", response)
         if match:
             # extracts the unsafe code
@@ -202,14 +221,14 @@ class LlamaGuardShield:
 
         return None
 
-    def get_safety_categories(self) -> List[str]:
+    def get_safety_categories(self) -> list[str]:
         excluded_categories = self.excluded_categories
         if set(excluded_categories) == set(SAFETY_CATEGORIES_TO_CODE_MAP.values()):
             excluded_categories = []
 
         final_categories = []
 
-        all_categories = MODEL_TO_SAFETY_CATEGORIES_MAP[self.model]
+        all_categories = self.safety_categories
         for cat in all_categories:
             cat_code = SAFETY_CATEGORIES_TO_CODE_MAP[cat]
             if cat_code in excluded_categories:
@@ -218,7 +237,7 @@ class LlamaGuardShield:
 
         return final_categories
 
-    def validate_messages(self, messages: List[Message]) -> None:
+    def validate_messages(self, messages: list[Message]) -> None:
         if len(messages) == 0:
             raise ValueError("Messages must not be empty")
         if messages[0].role != Role.user.value:
@@ -229,7 +248,7 @@ class LlamaGuardShield:
 
         return messages
 
-    async def run(self, messages: List[Message]) -> RunShieldResponse:
+    async def run(self, messages: list[Message]) -> RunShieldResponse:
         messages = self.validate_messages(messages)
 
         if self.model == CoreModelId.llama_guard_3_11b_vision.value:
@@ -247,10 +266,10 @@ class LlamaGuardShield:
         content = content.strip()
         return self.get_shield_response(content)
 
-    def build_text_shield_input(self, messages: List[Message]) -> UserMessage:
+    def build_text_shield_input(self, messages: list[Message]) -> UserMessage:
         return UserMessage(content=self.build_prompt(messages))
 
-    def build_vision_shield_input(self, messages: List[Message]) -> UserMessage:
+    def build_vision_shield_input(self, messages: list[Message]) -> UserMessage:
         conversation = []
         most_recent_img = None
 
@@ -284,7 +303,7 @@ class LlamaGuardShield:
 
         return UserMessage(content=prompt)
 
-    def build_prompt(self, messages: List[Message]) -> str:
+    def build_prompt(self, messages: list[Message]) -> str:
         categories = self.get_safety_categories()
         categories_str = "\n".join(categories)
         conversations_str = "\n\n".join(

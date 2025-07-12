@@ -4,24 +4,81 @@
 # This source code is licensed under the terms described in the LICENSE file in
 # the root directory of this source tree.
 
-import copy
 import inspect
-import logging
 import os
+import signal
+import socket
+import subprocess
 import tempfile
-from pathlib import Path
+import time
+from urllib.parse import urlparse
 
 import pytest
+import requests
 import yaml
 from llama_stack_client import LlamaStackClient
 from openai import OpenAI
 
 from llama_stack import LlamaStackAsLibraryClient
-from llama_stack.apis.datatypes import Api
 from llama_stack.distribution.stack import run_config_from_adhoc_config_spec
 from llama_stack.env import get_env_or_fail
 
-from .recordable_mock import RecordableMock
+DEFAULT_PORT = 8321
+
+
+def is_port_available(port: int, host: str = "localhost") -> bool:
+    """Check if a port is available for binding."""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.bind((host, port))
+            return True
+    except OSError:
+        return False
+
+
+def start_llama_stack_server(config_name: str) -> subprocess.Popen:
+    """Start a llama stack server with the given config."""
+    cmd = ["llama", "stack", "run", config_name]
+    devnull = open(os.devnull, "w")
+    process = subprocess.Popen(
+        cmd,
+        stdout=devnull,  # redirect stdout to devnull to prevent deadlock
+        stderr=subprocess.PIPE,  # keep stderr to see errors
+        text=True,
+        env={**os.environ, "LLAMA_STACK_LOG_FILE": "server.log"},
+        # Create new process group so we can kill all child processes
+        preexec_fn=os.setsid,
+    )
+    return process
+
+
+def wait_for_server_ready(base_url: str, timeout: int = 30, process: subprocess.Popen | None = None) -> bool:
+    """Wait for the server to be ready by polling the health endpoint."""
+    health_url = f"{base_url}/v1/health"
+    start_time = time.time()
+
+    while time.time() - start_time < timeout:
+        if process and process.poll() is not None:
+            print(f"Server process terminated with return code: {process.returncode}")
+            print(f"Server stderr: {process.stderr.read()}")
+            return False
+
+        try:
+            response = requests.get(health_url, timeout=5)
+            if response.status_code == 200:
+                return True
+        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout):
+            pass
+
+        # Print progress every 5 seconds
+        elapsed = time.time() - start_time
+        if int(elapsed) % 5 == 0 and elapsed > 0:
+            print(f"Waiting for server at {base_url}... ({elapsed:.1f}s elapsed)")
+
+        time.sleep(0.5)
+
+    print(f"Server failed to respond within {timeout} seconds")
+    return False
 
 
 @pytest.fixture(scope="session")
@@ -44,63 +101,6 @@ def provider_data():
         if os.environ.get(key):
             provider_data[value] = os.environ[key]
     return provider_data
-
-
-@pytest.fixture(scope="session")
-def llama_stack_client_with_mocked_inference(llama_stack_client, request):
-    """
-    Returns a client with mocked inference APIs and tool runtime APIs that use recorded responses by default.
-
-    If --record-responses is passed, it will call the real APIs and record the responses.
-    """
-    # TODO: will rework this to be more stable
-    return llama_stack_client
-    if not isinstance(llama_stack_client, LlamaStackAsLibraryClient):
-        logging.warning(
-            "llama_stack_client_with_mocked_inference is not supported for this client, returning original client without mocking"
-        )
-        return llama_stack_client
-
-    record_responses = request.config.getoption("--record-responses")
-    cache_dir = Path(__file__).parent / "recorded_responses"
-
-    # Create a shallow copy of the client to avoid modifying the original
-    client = copy.copy(llama_stack_client)
-
-    # Get the inference API used by the agents implementation
-    agents_impl = client.async_client.impls[Api.agents]
-    original_inference = agents_impl.inference_api
-
-    # Create a new inference object with the same attributes
-    inference_mock = copy.copy(original_inference)
-
-    # Replace the methods with recordable mocks
-    inference_mock.chat_completion = RecordableMock(
-        original_inference.chat_completion, cache_dir, "chat_completion", record=record_responses
-    )
-    inference_mock.completion = RecordableMock(
-        original_inference.completion, cache_dir, "text_completion", record=record_responses
-    )
-    inference_mock.embeddings = RecordableMock(
-        original_inference.embeddings, cache_dir, "embeddings", record=record_responses
-    )
-
-    # Replace the inference API in the agents implementation
-    agents_impl.inference_api = inference_mock
-
-    original_tool_runtime_api = agents_impl.tool_runtime_api
-    tool_runtime_mock = copy.copy(original_tool_runtime_api)
-
-    # Replace the methods with recordable mocks
-    tool_runtime_mock.invoke_tool = RecordableMock(
-        original_tool_runtime_api.invoke_tool, cache_dir, "invoke_tool", record=record_responses
-    )
-    agents_impl.tool_runtime_api = tool_runtime_mock
-
-    # Also update the client.inference for consistency
-    client.inference = inference_mock
-
-    return client
 
 
 @pytest.fixture(scope="session")
@@ -177,7 +177,7 @@ def skip_if_no_model(request):
 
 
 @pytest.fixture(scope="session")
-def llama_stack_client(request, provider_data, text_model_id):
+def llama_stack_client(request, provider_data):
     config = request.config.getoption("--stack-config")
     if not config:
         config = get_env_or_fail("LLAMA_STACK_CONFIG")
@@ -185,12 +185,53 @@ def llama_stack_client(request, provider_data, text_model_id):
     if not config:
         raise ValueError("You must specify either --stack-config or LLAMA_STACK_CONFIG")
 
-    # check if this looks like a URL
-    if config.startswith("http") or "//" in config:
+    # Handle server:<config_name> format or server:<config_name>:<port>
+    if config.startswith("server:"):
+        parts = config.split(":")
+        config_name = parts[1]
+        port = int(parts[2]) if len(parts) > 2 else int(os.environ.get("LLAMA_STACK_PORT", DEFAULT_PORT))
+        base_url = f"http://localhost:{port}"
+
+        # Check if port is available
+        if is_port_available(port):
+            print(f"Starting llama stack server with config '{config_name}' on port {port}...")
+
+            # Start server
+            server_process = start_llama_stack_server(config_name)
+
+            # Wait for server to be ready
+            if not wait_for_server_ready(base_url, timeout=120, process=server_process):
+                print("Server failed to start within timeout")
+                server_process.terminate()
+                raise RuntimeError(
+                    f"Server failed to start within timeout. Check that config '{config_name}' exists and is valid. "
+                    f"See server.log for details."
+                )
+
+            print(f"Server is ready at {base_url}")
+
+            # Store process for potential cleanup (pytest will handle termination at session end)
+            request.session._llama_stack_server_process = server_process
+        else:
+            print(f"Port {port} is already in use, assuming server is already running...")
+
         return LlamaStackClient(
-            base_url=config,
+            base_url=base_url,
             provider_data=provider_data,
+            timeout=int(os.environ.get("LLAMA_STACK_CLIENT_TIMEOUT", "30")),
         )
+
+    # check if this looks like a URL using proper URL parsing
+    try:
+        parsed_url = urlparse(config)
+        if parsed_url.scheme and parsed_url.netloc:
+            return LlamaStackClient(
+                base_url=config,
+                provider_data=provider_data,
+            )
+    except Exception:
+        # If URL parsing fails, treat as non-URL config
+        pass
 
     if "=" in config:
         run_config = run_config_from_adhoc_config_spec(config)
@@ -214,3 +255,34 @@ def llama_stack_client(request, provider_data, text_model_id):
 def openai_client(client_with_models):
     base_url = f"{client_with_models.base_url}/v1/openai/v1"
     return OpenAI(base_url=base_url, api_key="fake")
+
+
+@pytest.fixture(scope="session", autouse=True)
+def cleanup_server_process(request):
+    """Cleanup server process at the end of the test session."""
+    yield  # Run tests
+
+    if hasattr(request.session, "_llama_stack_server_process"):
+        server_process = request.session._llama_stack_server_process
+        if server_process:
+            if server_process.poll() is None:
+                print("Terminating llama stack server process...")
+            else:
+                print(f"Server process already terminated with return code: {server_process.returncode}")
+                return
+            try:
+                print(f"Terminating process {server_process.pid} and its group...")
+                # Kill the entire process group
+                os.killpg(os.getpgid(server_process.pid), signal.SIGTERM)
+                server_process.wait(timeout=10)
+                print("Server process and children terminated gracefully")
+            except subprocess.TimeoutExpired:
+                print("Server process did not terminate gracefully, killing it")
+                # Force kill the entire process group
+                os.killpg(os.getpgid(server_process.pid), signal.SIGKILL)
+                server_process.wait()
+                print("Server process and children killed")
+            except Exception as e:
+                print(f"Error during server cleanup: {e}")
+        else:
+            print("Server process not found - won't be able to cleanup")

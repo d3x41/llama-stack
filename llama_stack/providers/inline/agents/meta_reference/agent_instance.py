@@ -10,8 +10,8 @@ import re
 import secrets
 import string
 import uuid
-from datetime import datetime, timezone
-from typing import AsyncGenerator, List, Optional, Union
+from collections.abc import AsyncGenerator
+from datetime import UTC, datetime
 
 import httpx
 
@@ -60,6 +60,7 @@ from llama_stack.apis.inference import (
 from llama_stack.apis.safety import Safety
 from llama_stack.apis.tools import ToolGroups, ToolInvocationResult, ToolRuntime
 from llama_stack.apis.vector_io import VectorIO
+from llama_stack.distribution.datatypes import AccessRule
 from llama_stack.log import get_logger
 from llama_stack.models.llama.datatypes import (
     BuiltinTool,
@@ -95,15 +96,18 @@ class ChatAgent(ShieldRunnerMixin):
         tool_groups_api: ToolGroups,
         vector_io_api: VectorIO,
         persistence_store: KVStore,
+        created_at: str,
+        policy: list[AccessRule],
     ):
         self.agent_id = agent_id
         self.agent_config = agent_config
         self.inference_api = inference_api
         self.safety_api = safety_api
         self.vector_io_api = vector_io_api
-        self.storage = AgentPersistence(agent_id, persistence_store)
+        self.storage = AgentPersistence(agent_id, persistence_store, policy)
         self.tool_runtime_api = tool_runtime_api
         self.tool_groups_api = tool_groups_api
+        self.created_at = created_at
 
         ShieldRunnerMixin.__init__(
             self,
@@ -112,7 +116,7 @@ class ChatAgent(ShieldRunnerMixin):
             output_shields=agent_config.output_shields,
         )
 
-    def turn_to_messages(self, turn: Turn) -> List[Message]:
+    def turn_to_messages(self, turn: Turn) -> list[Message]:
         messages = []
 
         # NOTE: if a toolcall response is in a step, we do not add it when processing the input messages
@@ -161,7 +165,7 @@ class ChatAgent(ShieldRunnerMixin):
     async def create_session(self, name: str) -> str:
         return await self.storage.create_session(name)
 
-    async def get_messages_from_turns(self, turns: List[Turn]) -> List[Message]:
+    async def get_messages_from_turns(self, turns: list[Turn]) -> list[Message]:
         messages = []
         if self.agent_config.instructions != "":
             messages.append(SystemMessage(content=self.agent_config.instructions))
@@ -201,8 +205,8 @@ class ChatAgent(ShieldRunnerMixin):
 
     async def _run_turn(
         self,
-        request: Union[AgentTurnCreateRequest, AgentTurnResumeRequest],
-        turn_id: Optional[str] = None,
+        request: AgentTurnCreateRequest | AgentTurnResumeRequest,
+        turn_id: str | None = None,
     ) -> AsyncGenerator:
         assert request.stream is True, "Non-streaming not supported"
 
@@ -238,7 +242,7 @@ class ChatAgent(ShieldRunnerMixin):
             in_progress_tool_call_step = await self.storage.get_in_progress_tool_call_step(
                 request.session_id, request.turn_id
             )
-            now = datetime.now(timezone.utc).isoformat()
+            now = datetime.now(UTC).isoformat()
             tool_execution_step = ToolExecutionStep(
                 step_id=(in_progress_tool_call_step.step_id if in_progress_tool_call_step else str(uuid.uuid4())),
                 turn_id=request.turn_id,
@@ -263,7 +267,7 @@ class ChatAgent(ShieldRunnerMixin):
             start_time = last_turn.started_at
         else:
             messages.extend(request.messages)
-            start_time = datetime.now(timezone.utc).isoformat()
+            start_time = datetime.now(UTC).isoformat()
             input_messages = request.messages
 
         output_message = None
@@ -294,7 +298,7 @@ class ChatAgent(ShieldRunnerMixin):
             input_messages=input_messages,
             output_message=output_message,
             started_at=start_time,
-            completed_at=datetime.now(timezone.utc).isoformat(),
+            completed_at=datetime.now(UTC).isoformat(),
             steps=steps,
         )
         await self.storage.add_turn_to_session(request.session_id, turn)
@@ -321,10 +325,10 @@ class ChatAgent(ShieldRunnerMixin):
         self,
         session_id: str,
         turn_id: str,
-        input_messages: List[Message],
+        input_messages: list[Message],
         sampling_params: SamplingParams,
         stream: bool = False,
-        documents: Optional[List[Document]] = None,
+        documents: list[Document] | None = None,
     ) -> AsyncGenerator:
         # Doing async generators makes downstream code much simpler and everything amenable to
         # streaming. However, it also makes things complicated here because AsyncGenerators cannot
@@ -374,8 +378,8 @@ class ChatAgent(ShieldRunnerMixin):
     async def run_multiple_shields_wrapper(
         self,
         turn_id: str,
-        messages: List[Message],
-        shields: List[str],
+        messages: list[Message],
+        shields: list[str],
         touchpoint: str,
     ) -> AsyncGenerator:
         async with tracing.span("run_shields") as span:
@@ -385,7 +389,7 @@ class ChatAgent(ShieldRunnerMixin):
                 return
 
             step_id = str(uuid.uuid4())
-            shield_call_start_time = datetime.now(timezone.utc).isoformat()
+            shield_call_start_time = datetime.now(UTC).isoformat()
             try:
                 yield AgentTurnResponseStreamChunk(
                     event=AgentTurnResponseEvent(
@@ -409,7 +413,7 @@ class ChatAgent(ShieldRunnerMixin):
                                 turn_id=turn_id,
                                 violation=e.violation,
                                 started_at=shield_call_start_time,
-                                completed_at=datetime.now(timezone.utc).isoformat(),
+                                completed_at=datetime.now(UTC).isoformat(),
                             ),
                         )
                     )
@@ -432,7 +436,7 @@ class ChatAgent(ShieldRunnerMixin):
                             turn_id=turn_id,
                             violation=None,
                             started_at=shield_call_start_time,
-                            completed_at=datetime.now(timezone.utc).isoformat(),
+                            completed_at=datetime.now(UTC).isoformat(),
                         ),
                     )
                 )
@@ -443,10 +447,10 @@ class ChatAgent(ShieldRunnerMixin):
         self,
         session_id: str,
         turn_id: str,
-        input_messages: List[Message],
+        input_messages: list[Message],
         sampling_params: SamplingParams,
         stream: bool = False,
-        documents: Optional[List[Document]] = None,
+        documents: list[Document] | None = None,
     ) -> AsyncGenerator:
         # if document is passed in a turn, we parse the raw text of the document
         # and sent it as a user message
@@ -487,7 +491,7 @@ class ChatAgent(ShieldRunnerMixin):
             client_tools[tool.name] = tool
         while True:
             step_id = str(uuid.uuid4())
-            inference_start_time = datetime.now(timezone.utc).isoformat()
+            inference_start_time = datetime.now(UTC).isoformat()
             yield AgentTurnResponseStreamChunk(
                 event=AgentTurnResponseEvent(
                     payload=AgentTurnResponseStepStartPayload(
@@ -599,7 +603,7 @@ class ChatAgent(ShieldRunnerMixin):
                             turn_id=turn_id,
                             model_response=copy.deepcopy(message),
                             started_at=inference_start_time,
-                            completed_at=datetime.now(timezone.utc).isoformat(),
+                            completed_at=datetime.now(UTC).isoformat(),
                         ),
                     )
                 )
@@ -677,7 +681,7 @@ class ChatAgent(ShieldRunnerMixin):
                             "input": message.model_dump_json(),
                         },
                     ) as span:
-                        tool_execution_start_time = datetime.now(timezone.utc).isoformat()
+                        tool_execution_start_time = datetime.now(UTC).isoformat()
                         tool_result = await self.execute_tool_call_maybe(
                             session_id,
                             tool_call,
@@ -706,7 +710,7 @@ class ChatAgent(ShieldRunnerMixin):
                                 )
                             ],
                             started_at=tool_execution_start_time,
-                            completed_at=datetime.now(timezone.utc).isoformat(),
+                            completed_at=datetime.now(UTC).isoformat(),
                         )
 
                         # Yield the step completion event
@@ -743,7 +747,7 @@ class ChatAgent(ShieldRunnerMixin):
                             turn_id=turn_id,
                             tool_calls=client_tool_calls,
                             tool_responses=[],
-                            started_at=datetime.now(timezone.utc).isoformat(),
+                            started_at=datetime.now(UTC).isoformat(),
                         ),
                     )
 
@@ -760,7 +764,7 @@ class ChatAgent(ShieldRunnerMixin):
 
     async def _initialize_tools(
         self,
-        toolgroups_for_turn: Optional[List[AgentToolGroup]] = None,
+        toolgroups_for_turn: list[AgentToolGroup] | None = None,
     ) -> None:
         toolgroup_to_args = {}
         for toolgroup in (self.agent_config.toolgroups or []) + (toolgroups_for_turn or []):
@@ -847,7 +851,7 @@ class ChatAgent(ShieldRunnerMixin):
             tool_name_to_args,
         )
 
-    def _parse_toolgroup_name(self, toolgroup_name_with_maybe_tool_name: str) -> tuple[str, Optional[str]]:
+    def _parse_toolgroup_name(self, toolgroup_name_with_maybe_tool_name: str) -> tuple[str, str | None]:
         """Parse a toolgroup name into its components.
 
         Args:
@@ -921,7 +925,7 @@ async def get_raw_document_text(document: Document) -> str:
 
 def _interpret_content_as_attachment(
     content: str,
-) -> Optional[Attachment]:
+) -> Attachment | None:
     match = re.search(TOOLS_ATTACHMENT_KEY_REGEX, content)
     if match:
         snippet = match.group(1)

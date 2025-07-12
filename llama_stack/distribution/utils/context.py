@@ -4,14 +4,12 @@
 # This source code is licensed under the terms described in the LICENSE file in
 # the root directory of this source tree.
 
+from collections.abc import AsyncGenerator
 from contextvars import ContextVar
-from typing import AsyncGenerator, List, TypeVar
-
-T = TypeVar("T")
 
 
-def preserve_contexts_async_generator(
-    gen: AsyncGenerator[T, None], context_vars: List[ContextVar]
+def preserve_contexts_async_generator[T](
+    gen: AsyncGenerator[T, None], context_vars: list[ContextVar]
 ) -> AsyncGenerator[T, None]:
     """
     Wraps an async generator to preserve context variables across iterations.

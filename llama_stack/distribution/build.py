@@ -6,6 +6,7 @@
 
 import importlib.resources
 import logging
+import sys
 from pathlib import Path
 
 from pydantic import BaseModel
@@ -28,6 +29,8 @@ SERVER_DEPENDENCIES = [
     "fire",
     "httpx",
     "uvicorn",
+    "opentelemetry-sdk",
+    "opentelemetry-exporter-otlp-proto-http",
 ]
 
 
@@ -40,11 +43,12 @@ def get_provider_dependencies(
     config: BuildConfig | DistributionTemplate,
 ) -> tuple[list[str], list[str]]:
     """Get normal and special dependencies from provider configuration."""
-    # Extract providers based on config type
     if isinstance(config, DistributionTemplate):
-        providers = config.providers
-    elif isinstance(config, BuildConfig):
-        providers = config.distribution_spec.providers
+        config = config.build_config()
+
+    providers = config.distribution_spec.providers
+    additional_pip_packages = config.additional_pip_packages
+
     deps = []
     registry = get_provider_registry(config)
     for api_str, provider_or_providers in providers.items():
@@ -72,6 +76,8 @@ def get_provider_dependencies(
         else:
             normal_deps.append(package)
 
+    normal_deps.extend(additional_pip_packages or [])
+
     return list(set(normal_deps)), list(set(special_deps))
 
 
@@ -80,10 +86,11 @@ def print_pip_install_help(config: BuildConfig):
 
     cprint(
         f"Please install needed dependencies using the following commands:\n\nuv pip install {' '.join(normal_deps)}",
-        "yellow",
+        color="yellow",
+        file=sys.stderr,
     )
     for special_dep in special_deps:
-        cprint(f"uv pip install {special_dep}", "yellow")
+        cprint(f"uv pip install {special_dep}", color="yellow", file=sys.stderr)
     print()
 
 
@@ -94,7 +101,7 @@ def build_image(
     template_or_config: str,
     run_config: str | None = None,
 ):
-    container_base = build_config.distribution_spec.container_image or "python:3.10-slim"
+    container_base = build_config.distribution_spec.container_image or "python:3.12-slim"
 
     normal_deps, special_deps = get_provider_dependencies(build_config)
     normal_deps += SERVER_DEPENDENCIES

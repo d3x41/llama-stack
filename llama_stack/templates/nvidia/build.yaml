@@ -1,4 +1,4 @@
-version: '2'
+version: 2
 distribution_spec:
   description: Use NVIDIA NIM for running LLM inference, evaluation and safety
   providers:
@@ -24,3 +24,6 @@ distribution_spec:
     tool_runtime:
     - inline::rag-runtime
 image_type: conda
+additional_pip_packages:
+- aiosqlite
+- sqlalchemy[asyncio]

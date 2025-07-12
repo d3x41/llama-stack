@@ -4,7 +4,7 @@
 # This source code is licensed under the terms described in the LICENSE file in
 # the root directory of this source tree.
 
-from typing import AsyncGenerator, List, Optional
+from collections.abc import AsyncGenerator
 
 from openai import OpenAI
 
@@ -20,6 +20,7 @@ from llama_stack.apis.inference import (
     Inference,
     LogProbConfig,
     Message,
+    OpenAIEmbeddingsResponse,
     ResponseFormat,
     SamplingParams,
     TextTruncation,
@@ -46,7 +47,10 @@ from llama_stack.providers.utils.inference.prompt_adapter import (
 
 from .config import DatabricksImplConfig
 
-model_entries = [
+SAFETY_MODELS_ENTRIES = []
+
+# https://docs.databricks.com/aws/en/machine-learning/model-serving/foundation-model-overview
+MODEL_ENTRIES = [
     build_hf_repo_model_entry(
         "databricks-meta-llama-3-1-70b-instruct",
         CoreModelId.llama3_1_70b_instruct.value,
@@ -55,7 +59,7 @@ model_entries = [
         "databricks-meta-llama-3-1-405b-instruct",
         CoreModelId.llama3_1_405b_instruct.value,
     ),
-]
+] + SAFETY_MODELS_ENTRIES
 
 
 class DatabricksInferenceAdapter(
@@ -65,7 +69,7 @@ class DatabricksInferenceAdapter(
     OpenAICompletionToLlamaStackMixin,
 ):
     def __init__(self, config: DatabricksImplConfig) -> None:
-        ModelRegistryHelper.__init__(self, model_entries=model_entries)
+        ModelRegistryHelper.__init__(self, model_entries=MODEL_ENTRIES)
         self.config = config
 
     async def initialize(self) -> None:
@@ -78,25 +82,25 @@ class DatabricksInferenceAdapter(
         self,
         model: str,
         content: InterleavedContent,
-        sampling_params: Optional[SamplingParams] = None,
-        response_format: Optional[ResponseFormat] = None,
-        stream: Optional[bool] = False,
-        logprobs: Optional[LogProbConfig] = None,
+        sampling_params: SamplingParams | None = None,
+        response_format: ResponseFormat | None = None,
+        stream: bool | None = False,
+        logprobs: LogProbConfig | None = None,
     ) -> AsyncGenerator:
         raise NotImplementedError()
 
     async def chat_completion(
         self,
         model: str,
-        messages: List[Message],
-        sampling_params: Optional[SamplingParams] = None,
-        response_format: Optional[ResponseFormat] = None,
-        tools: Optional[List[ToolDefinition]] = None,
-        tool_choice: Optional[ToolChoice] = ToolChoice.auto,
-        tool_prompt_format: Optional[ToolPromptFormat] = None,
-        stream: Optional[bool] = False,
-        logprobs: Optional[LogProbConfig] = None,
-        tool_config: Optional[ToolConfig] = None,
+        messages: list[Message],
+        sampling_params: SamplingParams | None = None,
+        response_format: ResponseFormat | None = None,
+        tools: list[ToolDefinition] | None = None,
+        tool_choice: ToolChoice | None = ToolChoice.auto,
+        tool_prompt_format: ToolPromptFormat | None = None,
+        stream: bool | None = False,
+        logprobs: LogProbConfig | None = None,
+        tool_config: ToolConfig | None = None,
     ) -> AsyncGenerator:
         if sampling_params is None:
             sampling_params = SamplingParams()
@@ -146,9 +150,19 @@ class DatabricksInferenceAdapter(
     async def embeddings(
         self,
         model_id: str,
-        contents: List[str] | List[InterleavedContentItem],
-        text_truncation: Optional[TextTruncation] = TextTruncation.none,
-        output_dimension: Optional[int] = None,
-        task_type: Optional[EmbeddingTaskType] = None,
+        contents: list[str] | list[InterleavedContentItem],
+        text_truncation: TextTruncation | None = TextTruncation.none,
+        output_dimension: int | None = None,
+        task_type: EmbeddingTaskType | None = None,
     ) -> EmbeddingsResponse:
+        raise NotImplementedError()
+
+    async def openai_embeddings(
+        self,
+        model: str,
+        input: str | list[str],
+        encoding_format: str | None = "float",
+        dimensions: int | None = None,
+        user: str | None = None,
+    ) -> OpenAIEmbeddingsResponse:
         raise NotImplementedError()

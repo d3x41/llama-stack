@@ -6,14 +6,14 @@
 # This source code is licensed under the terms described in the LICENSE file in
 # the root directory of this source tree.
 
-PYTHON_VERSION=${PYTHON_VERSION:-3.10}
+PYTHON_VERSION=${PYTHON_VERSION:-3.12}
 
 command -v uv >/dev/null 2>&1 || { echo >&2 "uv is required but it's not installed. Exiting."; exit 1; }
 
-uv python find $PYTHON_VERSION
+uv python find "$PYTHON_VERSION"
 FOUND_PYTHON=$?
 if [ $FOUND_PYTHON -ne 0 ]; then
-     uv python install $PYTHON_VERSION
+     uv python install "$PYTHON_VERSION"
 fi
 
-uv run --python $PYTHON_VERSION --with-editable . --with-editable ".[dev]" --with-editable ".[unit]" pytest --asyncio-mode=auto -s -v tests/unit/ $@
+uv run --python "$PYTHON_VERSION" --with-editable . --group unit pytest -s -v tests/unit/ $@

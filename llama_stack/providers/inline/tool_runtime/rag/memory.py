@@ -8,7 +8,7 @@ import asyncio
 import logging
 import secrets
 import string
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from pydantic import TypeAdapter
 
@@ -25,14 +25,14 @@ from llama_stack.apis.tools import (
     RAGQueryConfig,
     RAGQueryResult,
     RAGToolRuntime,
-    Tool,
     ToolDef,
+    ToolGroup,
     ToolInvocationResult,
     ToolParameter,
     ToolRuntime,
 )
 from llama_stack.apis.vector_io import QueryChunksResponse, VectorIO
-from llama_stack.providers.datatypes import ToolsProtocolPrivate
+from llama_stack.providers.datatypes import ToolGroupsProtocolPrivate
 from llama_stack.providers.utils.inference.prompt_adapter import interleaved_content_as_str
 from llama_stack.providers.utils.memory.vector_store import (
     content_from_doc,
@@ -49,7 +49,7 @@ def make_random_string(length: int = 8):
     return "".join(secrets.choice(string.ascii_letters + string.digits) for _ in range(length))
 
 
-class MemoryToolRuntimeImpl(ToolsProtocolPrivate, ToolRuntime, RAGToolRuntime):
+class MemoryToolRuntimeImpl(ToolGroupsProtocolPrivate, ToolRuntime, RAGToolRuntime):
     def __init__(
         self,
         config: RagToolRuntimeConfig,
@@ -66,27 +66,29 @@ class MemoryToolRuntimeImpl(ToolsProtocolPrivate, ToolRuntime, RAGToolRuntime):
     async def shutdown(self):
         pass
 
-    async def register_tool(self, tool: Tool) -> None:
+    async def register_toolgroup(self, toolgroup: ToolGroup) -> None:
         pass
 
-    async def unregister_tool(self, tool_id: str) -> None:
+    async def unregister_toolgroup(self, toolgroup_id: str) -> None:
         return
 
     async def insert(
         self,
-        documents: List[RAGDocument],
+        documents: list[RAGDocument],
         vector_db_id: str,
         chunk_size_in_tokens: int = 512,
     ) -> None:
         chunks = []
         for doc in documents:
             content = await content_from_doc(doc)
+            # TODO: we should add enrichment here as URLs won't be added to the metadata by default
             chunks.extend(
                 make_overlapped_chunks(
                     doc.document_id,
                     content,
                     chunk_size_in_tokens,
                     chunk_size_in_tokens // 4,
+                    doc.metadata,
                 )
             )
 
@@ -101,11 +103,13 @@ class MemoryToolRuntimeImpl(ToolsProtocolPrivate, ToolRuntime, RAGToolRuntime):
     async def query(
         self,
         content: InterleavedContent,
-        vector_db_ids: List[str],
-        query_config: Optional[RAGQueryConfig] = None,
+        vector_db_ids: list[str],
+        query_config: RAGQueryConfig | None = None,
     ) -> RAGQueryResult:
         if not vector_db_ids:
-            return RAGQueryResult(content=None)
+            raise ValueError(
+                "No vector DBs were provided to the knowledge search tool. Please provide at least one vector DB ID."
+            )
 
         query_config = query_config or RAGQueryConfig()
         query = await generate_rag_query(
@@ -118,12 +122,15 @@ class MemoryToolRuntimeImpl(ToolsProtocolPrivate, ToolRuntime, RAGToolRuntime):
                 vector_db_id=vector_db_id,
                 query=query,
                 params={
+                    "mode": query_config.mode,
                     "max_chunks": query_config.max_chunks,
+                    "score_threshold": 0.0,
+                    "ranker": query_config.ranker,
                 },
             )
             for vector_db_id in vector_db_ids
         ]
-        results: List[QueryChunksResponse] = await asyncio.gather(*tasks)
+        results: list[QueryChunksResponse] = await asyncio.gather(*tasks)
         chunks = [c for r in results for c in r.chunks]
         scores = [s for r in results for s in r.scores]
 
@@ -140,19 +147,37 @@ class MemoryToolRuntimeImpl(ToolsProtocolPrivate, ToolRuntime, RAGToolRuntime):
                 text=f"knowledge_search tool found {len(chunks)} chunks:\nBEGIN of knowledge_search tool results.\n"
             )
         ]
-        for i, c in enumerate(chunks):
-            metadata = c.metadata
-            tokens += metadata["token_count"]
+        for i, chunk in enumerate(chunks):
+            metadata = chunk.metadata
+            tokens += metadata.get("token_count", 0)
+            tokens += metadata.get("metadata_token_count", 0)
+
             if tokens > query_config.max_tokens_in_context:
                 log.error(
                     f"Using {len(picked)} chunks; reached max tokens in context: {tokens}",
                 )
                 break
-            picked.append(
-                TextContentItem(
-                    text=f"Result {i + 1}:\nDocument_id:{metadata['document_id'][:5]}\nContent: {c.content}\n",
-                )
-            )
+
+            # Add useful keys from chunk_metadata to metadata and remove some from metadata
+            chunk_metadata_keys_to_include_from_context = [
+                "chunk_id",
+                "document_id",
+                "source",
+            ]
+            metadata_keys_to_exclude_from_context = [
+                "token_count",
+                "metadata_token_count",
+            ]
+            metadata_for_context = {}
+            for k in chunk_metadata_keys_to_include_from_context:
+                metadata_for_context[k] = getattr(chunk.chunk_metadata, k)
+            for k in metadata:
+                if k not in metadata_keys_to_exclude_from_context:
+                    metadata_for_context[k] = metadata[k]
+
+            text_content = query_config.chunk_template.format(index=i + 1, chunk=chunk, metadata=metadata_for_context)
+            picked.append(TextContentItem(text=text_content))
+
         picked.append(TextContentItem(text="END of knowledge_search tool results.\n"))
         picked.append(
             TextContentItem(
@@ -164,11 +189,13 @@ class MemoryToolRuntimeImpl(ToolsProtocolPrivate, ToolRuntime, RAGToolRuntime):
             content=picked,
             metadata={
                 "document_ids": [c.metadata["document_id"] for c in chunks[: len(picked)]],
+                "chunks": [c.content for c in chunks[: len(picked)]],
+                "scores": scores[: len(picked)],
             },
         )
 
     async def list_runtime_tools(
-        self, tool_group_id: Optional[str] = None, mcp_endpoint: Optional[URL] = None
+        self, tool_group_id: str | None = None, mcp_endpoint: URL | None = None
     ) -> ListToolDefsResponse:
         # Parameters are not listed since these methods are not yet invoked automatically
         # by the LLM. The method is only implemented so things like /tools can list without
@@ -193,7 +220,7 @@ class MemoryToolRuntimeImpl(ToolsProtocolPrivate, ToolRuntime, RAGToolRuntime):
             ]
         )
 
-    async def invoke_tool(self, tool_name: str, kwargs: Dict[str, Any]) -> ToolInvocationResult:
+    async def invoke_tool(self, tool_name: str, kwargs: dict[str, Any]) -> ToolInvocationResult:
         vector_db_ids = kwargs.get("vector_db_ids", [])
         query_config = kwargs.get("query_config")
         if query_config:

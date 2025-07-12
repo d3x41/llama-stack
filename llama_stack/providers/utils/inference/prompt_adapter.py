@@ -9,7 +9,6 @@ import base64
 import io
 import json
 import re
-from typing import List, Optional, Tuple, Union
 
 import httpx
 from PIL import Image as PIL_Image
@@ -63,7 +62,7 @@ log = get_logger(name=__name__, category="inference")
 
 
 class ChatCompletionRequestWithRawContent(ChatCompletionRequest):
-    messages: List[RawMessage]
+    messages: list[RawMessage]
 
 
 class CompletionRequestWithRawContent(CompletionRequest):
@@ -93,8 +92,8 @@ def interleaved_content_as_str(content: InterleavedContent, sep: str = " ") -> s
 
 
 async def convert_request_to_raw(
-    request: Union[ChatCompletionRequest, CompletionRequest],
-) -> Union[ChatCompletionRequestWithRawContent, CompletionRequestWithRawContent]:
+    request: ChatCompletionRequest | CompletionRequest,
+) -> ChatCompletionRequestWithRawContent | CompletionRequestWithRawContent:
     if isinstance(request, ChatCompletionRequest):
         messages = []
         for m in request.messages:
@@ -170,22 +169,21 @@ def content_has_media(content: InterleavedContent):
         return _has_media_content(content)
 
 
-def messages_have_media(messages: List[Message]):
+def messages_have_media(messages: list[Message]):
     return any(content_has_media(m.content) for m in messages)
 
 
-def request_has_media(request: Union[ChatCompletionRequest, CompletionRequest]):
+def request_has_media(request: ChatCompletionRequest | CompletionRequest):
     if isinstance(request, ChatCompletionRequest):
         return messages_have_media(request.messages)
     else:
         return content_has_media(request.content)
 
 
-async def localize_image_content(media: ImageContentItem) -> Tuple[bytes, str]:
-    image = media.image
-    if image.url and image.url.uri.startswith("http"):
+async def localize_image_content(uri: str) -> tuple[bytes, str] | None:
+    if uri.startswith("http"):
         async with httpx.AsyncClient() as client:
-            r = await client.get(image.url.uri)
+            r = await client.get(uri)
             content = r.content
             content_type = r.headers.get("content-type")
             if content_type:
@@ -195,11 +193,7 @@ async def localize_image_content(media: ImageContentItem) -> Tuple[bytes, str]:
 
         return content, format
     else:
-        # data is a base64 encoded string, decode it to bytes first
-        # TODO(mf): do this more efficiently, decode less
-        data_bytes = base64.b64decode(image.data)
-        pil_image = PIL_Image.open(io.BytesIO(data_bytes))
-        return data_bytes, pil_image.format
+        return None
 
 
 async def convert_image_content_to_url(
@@ -209,7 +203,18 @@ async def convert_image_content_to_url(
     if image.url and (not download or image.url.uri.startswith("data")):
         return image.url.uri
 
-    content, format = await localize_image_content(media)
+    if image.data:
+        # data is a base64 encoded string, decode it to bytes first
+        # TODO(mf): do this more efficiently, decode less
+        content = base64.b64decode(image.data)
+        pil_image = PIL_Image.open(io.BytesIO(content))
+        format = pil_image.format
+    else:
+        localize_result = await localize_image_content(image.url.uri)
+        if localize_result is None:
+            raise ValueError(f"Failed to localize image content from {image.url.uri}")
+        content, format = localize_result
+
     if include_format:
         return f"data:image/{format};base64," + base64.b64encode(content).decode("utf-8")
     else:
@@ -228,7 +233,7 @@ async def completion_request_to_prompt(request: CompletionRequest) -> str:
 
 async def completion_request_to_prompt_model_input_info(
     request: CompletionRequest,
-) -> Tuple[str, int]:
+) -> tuple[str, int]:
     content = augment_content_with_response_format_prompt(request.response_format, request.content)
     request.content = content
     request = await convert_request_to_raw(request)
@@ -265,7 +270,7 @@ async def chat_completion_request_to_prompt(request: ChatCompletionRequest, llam
 
 async def chat_completion_request_to_model_input_info(
     request: ChatCompletionRequest, llama_model: str
-) -> Tuple[str, int]:
+) -> tuple[str, int]:
     messages = chat_completion_request_to_messages(request, llama_model)
     request.messages = messages
     request = await convert_request_to_raw(request)
@@ -284,7 +289,7 @@ async def chat_completion_request_to_model_input_info(
 def chat_completion_request_to_messages(
     request: ChatCompletionRequest,
     llama_model: str,
-) -> List[Message]:
+) -> list[Message]:
     """Reads chat completion request and augments the messages to handle tools.
     For eg. for llama_3_1, add system message with the appropriate tools or
     add user messsage for custom tools, etc.
@@ -323,7 +328,7 @@ def chat_completion_request_to_messages(
     return messages
 
 
-def response_format_prompt(fmt: Optional[ResponseFormat]):
+def response_format_prompt(fmt: ResponseFormat | None):
     if not fmt:
         return None
 
@@ -337,7 +342,7 @@ def response_format_prompt(fmt: Optional[ResponseFormat]):
 
 def augment_messages_for_tools_llama_3_1(
     request: ChatCompletionRequest,
-) -> List[Message]:
+) -> list[Message]:
     existing_messages = request.messages
     existing_system_message = None
     if existing_messages[0].role == Role.system.value:
@@ -383,7 +388,7 @@ def augment_messages_for_tools_llama_3_1(
 
     messages.append(SystemMessage(content=sys_content))
 
-    has_custom_tools = any(isinstance(dfn.tool_name, str) for dfn in request.tools)
+    has_custom_tools = request.tools is not None and any(isinstance(dfn.tool_name, str) for dfn in request.tools)
     if has_custom_tools:
         fmt = request.tool_config.tool_prompt_format or ToolPromptFormat.json
         if fmt == ToolPromptFormat.json:
@@ -406,7 +411,7 @@ def augment_messages_for_tools_llama_3_1(
 def augment_messages_for_tools_llama(
     request: ChatCompletionRequest,
     custom_tool_prompt_generator,
-) -> List[Message]:
+) -> list[Message]:
     existing_messages = request.messages
     existing_system_message = None
     if existing_messages[0].role == Role.system.value:
@@ -457,7 +462,7 @@ def augment_messages_for_tools_llama(
     return messages
 
 
-def _get_tool_choice_prompt(tool_choice: ToolChoice | str, tools: List[ToolDefinition]) -> str:
+def _get_tool_choice_prompt(tool_choice: ToolChoice | str, tools: list[ToolDefinition]) -> str:
     if tool_choice == ToolChoice.auto:
         return ""
     elif tool_choice == ToolChoice.required:
